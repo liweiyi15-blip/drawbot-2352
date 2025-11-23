@@ -15,8 +15,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0'))
 FMP_API_KEY = os.getenv('FMP_API_KEY') 
 
-# === 💾 Railway 持久化路径设置 ===
-# 自动检测是否挂载了 Volume (/data)
+# === 💾 Railway 持久化路径 ===
 BASE_PATH = "/data" if os.path.exists("/data") else "."
 DATA_FILE = os.path.join(BASE_PATH, "watchlist.json")
 CONFIG_FILE = os.path.join(BASE_PATH, "config.json")
@@ -32,7 +31,6 @@ bot_config = {"interval": 30}
 def load_data():
     global watch_data, bot_config
     
-    # 1. 加载列表
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r') as f:
@@ -41,8 +39,7 @@ def load_data():
         except Exception as e:
             print(f"⚠️ 加载列表失败: {e}")
             watch_data = {}
-    
-    # 2. 加载配置
+            
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
@@ -50,8 +47,7 @@ def load_data():
             print(f"⚙️ 已加载配置: 间隔 {bot_config.get('interval')} 分钟")
         except:
             bot_config = {"interval": 30}
-
-    # 3. 初始化默认
+    
     if not watch_data:
         default_tickers = ["TSLA", "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META"]
         print("⚡ 初始化默认列表: 七大科技")
@@ -198,8 +194,7 @@ def get_daily_data_stable(ticker):
         print(f"❌ 数据处理异常 {ticker}: {e}")
         return None
 
-# 🆕 辅助函数：模糊查找列名
-# 解决 BBU_20_2.0 和 BBU_20_2 的兼容性问题
+# 辅助函数：模糊查找列名 (BBU_20_2.0 vs BBU_20_2)
 def get_col(df, prefix):
     for col in df.columns:
         if col.startswith(prefix):
@@ -212,7 +207,7 @@ def analyze_daily_signals(ticker):
 
     signals = []
     
-    # --- 计算 ---
+    # --- 1. 计算指标 ---
     df['nx_blue_up'] = df['high'].ewm(span=24, adjust=False).mean()
     df['nx_blue_dw'] = df['low'].ewm(span=23, adjust=False).mean()
     df['nx_yell_up'] = df['high'].ewm(span=89, adjust=False).mean()
@@ -237,27 +232,28 @@ def analyze_daily_signals(ticker):
     
     df['VOL_MA_20'] = df.ta.sma(close='volume', length=20)
 
-    # 强制大写，统一标准
+    # === ⚡️ 强制列名大写 (Fix KeyError) ===
     df.columns = [str(c).upper() for c in df.columns]
+    # =======================================
 
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
-    price = curr['CLOSE'] # 使用大写
+    price = curr['CLOSE']
 
-    # === 🆕 动态获取布林带列名 (解决报错核心) ===
-    # 查找以 BBU, BBL, BBM 开头的列
+    # 动态获取布林带列名
     col_bbu = get_col(df, 'BBU')
     col_bbl = get_col(df, 'BBL')
     col_bbm = get_col(df, 'BBM')
-    # ===========================================
 
     # --- A. David Nx ---
     is_break_blue = prev['CLOSE'] < prev['NX_BLUE_UP'] and curr['CLOSE'] > curr['NX_BLUE_UP']
     is_break_yell = prev['CLOSE'] < prev['NX_YELL_UP'] and curr['CLOSE'] > curr['NX_YELL_UP']
     if curr['CLOSE'] > curr['NX_BLUE_UP'] and curr['CLOSE'] > curr['NX_YELL_UP']:
-        if is_break_blue or is_break_yell: signals.append("🧗 Nx 突破双梯 (强力买入)")
-        elif curr['CLOSE'] > curr['NX_BLUE_DW']: signals.append("🔒 Nx 站稳蓝梯 (持股待涨)")
+        if is_break_blue or is_break_yell:
+            signals.append("🧗 Nx 突破双梯 (强力买入)")
+        elif curr['CLOSE'] > curr['NX_BLUE_DW']:
+            signals.append("🔒 Nx 站稳蓝梯 (持股待涨)")
     if prev['CLOSE'] > prev['NX_BLUE_DW'] and curr['CLOSE'] < curr['NX_BLUE_DW']: signals.append("📉 Nx 跌破蓝梯下沿 (卖出/减仓)")
     if curr['NX_BLUE_DW'] > curr['NX_YELL_UP']: signals.append("🌈 Nx 牛市排列 (大趋势看涨)")
     elif curr['NX_YELL_DW'] > curr['NX_BLUE_UP']: signals.append("⚠️ Nx 熊市压制 (大趋势看跌)")
@@ -281,12 +277,11 @@ def analyze_daily_signals(ticker):
             elif rvol > 2.0 and curr['CLOSE'] < prev['CLOSE']: signals.append(f"😰 放量大跌 (量比{rvol:.1f}x)")
             elif rvol < 0.6 and curr['CLOSE'] < prev['CLOSE']: signals.append("💤 缩量回调")
 
-    # --- C. 支撑压力 (Pivot) ---
+    # --- C. 支撑压力 (修正大小写引用) ---
     if 'P_FIB_R1' in df.columns:
         if prev['CLOSE'] < curr['P_FIB_R1'] and curr['CLOSE'] > curr['P_FIB_R1']: signals.append(f"🚀 突破 R1 阻力")
         if prev['CLOSE'] > curr['P_FIB_S1'] and curr['CLOSE'] < curr['P_FIB_S1']: signals.append(f"📉 跌破 S1 支撑")
     
-    # 唐奇安
     if curr['CLOSE'] > prev['DCU_20_20']: signals.append("🧱 突破唐奇安上轨")
     if curr['CLOSE'] < prev['DCL_20_20']: signals.append("🕳️ 跌破唐奇安下轨")
 
@@ -305,7 +300,7 @@ def analyze_daily_signals(ticker):
                 if m == 200: signals.append("🐻 跌破年线 (MA200)")
                 else: signals.append(f"📉 跌破 MA{m}")
 
-    # --- E. 震荡与动能 (使用动态获取的列名) ---
+    # --- E. 震荡与动能 ---
     if col_bbu and curr['CLOSE'] > curr[col_bbu]: signals.append("⚡ 突破布林上轨")
     if col_bbl and curr['CLOSE'] < curr[col_bbl]: signals.append("🩸 跌破布林下轨")
     if col_bbm:
@@ -319,13 +314,15 @@ def analyze_daily_signals(ticker):
     if prev[macd] < prev[sig] and curr[macd] > curr[sig]: signals.append("✨ MACD 金叉")
     elif prev[macd] > prev[sig] and curr[macd] < curr[sig]: signals.append("💀 MACD 死叉")
 
+    # 背离 (修正大小写引用)
     window = 20
     recent = df.iloc[-window:-1]
     if not recent.empty:
+        # 必须全部用大写
         if curr['CLOSE'] > recent['CLOSE'].max() and curr['RSI_14'] < recent['RSI_14'].max(): signals.append("📉 RSI 顶背离")
         if curr['CLOSE'] < recent['CLOSE'].min() and curr['RSI_14'] > recent['RSI_14'].min(): signals.append("📈 RSI 底背离")
         if curr['CLOSE'] > recent['CLOSE'].max() and curr[macd] < recent[macd].max(): signals.append("📉 MACD 顶背离")
-        if curr['CLOSE'] < recent['close'].min() and curr[macd] > recent[macd].min(): signals.append("📈 MACD 底背离")
+        if curr['CLOSE'] < recent['CLOSE'].min() and curr[macd] > recent[macd].min(): signals.append("📈 MACD 底背离")
         if curr['CLOSE'] < recent['CLOSE'].min() and curr['OBV'] > recent['OBV'].min(): signals.append("💰 OBV 底背离")
         if curr['CLOSE'] > recent['CLOSE'].max() and curr['OBV'] < recent['OBV'].max(): signals.append("💸 OBV 顶背离")
 
@@ -359,12 +356,11 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ 稳健修复版Bot已启动: {bot.user}')
+    print(f'✅ 修复版Bot已启动: {bot.user}')
     
-    # 应用配置间隔
     interval = bot_config.get('interval', 30)
     daily_monitor.change_interval(minutes=interval)
-    print(f"⏱️ 扫描间隔已设定: {interval} 分钟")
+    print(f"⏱️ 扫描间隔: {interval} 分钟")
     
     await bot.tree.sync()
     if not daily_monitor.is_running():
@@ -478,9 +474,9 @@ async def daily_monitor():
                 await asyncio.sleep(2)
                 
         except Exception as e:
-            # 打印完整堆栈有助于排查
+            # 完整打印错误堆栈，方便调试
             import traceback
-            print(f"Error {ticker}: {e}")
             traceback.print_exc()
+            print(f"Error {ticker}: {e}")
 
 bot.run(TOKEN)
