@@ -15,7 +15,6 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0'))
 FMP_API_KEY = os.getenv('FMP_API_KEY') 
 
-# === 💾 Railway 持久化路径 ===
 BASE_PATH = "/data" if os.path.exists("/data") else "."
 DATA_FILE = os.path.join(BASE_PATH, "watchlist.json")
 CONFIG_FILE = os.path.join(BASE_PATH, "config.json")
@@ -65,7 +64,7 @@ def save_config():
 def get_signal_advice(signal_text):
     t = signal_text
     advice = ""
-    # 根据关键词匹配建议
+    
     if "Nx 突破" in t: advice = "🧗 **Nx买入**: 突破蓝黄双梯，满仓进攻信号。"
     elif "Nx 跌破" in t: advice = "📉 **Nx逃命**: 跌破短期生命线，必须减仓/清仓。"
     elif "Nx 站稳" in t: advice = "🔒 **Nx持股**: 不破下沿死不卖，享受主升浪。"
@@ -95,7 +94,7 @@ def get_signal_advice(signal_text):
 
     return advice
 
-# ================= ⚖️ 评分系统 =================
+# ================= ⚖️ 评分系统 (红涨绿跌版) =================
 def calculate_sentiment_score(signals):
     score = 0
     
@@ -111,31 +110,34 @@ def calculate_sentiment_score(signals):
 
     title = ""
     color = discord.Color.light_grey()
-    score_bar = "|" * min(abs(score), 10)
-    bar_vis = "■" * int(min(abs(score), 10)) + "□" * (10 - int(min(abs(score), 10)))
     
+    # 进度条生成
+    fill = int(min(abs(score), 10))
+    bar_vis = "■" * fill + "□" * (10 - fill)
+    
+    # 🔴 多头 (Red) | 🟢 空头 (Green)
     if score >= 8:
         title = f"👑 满仓搞 (+{score}) [{bar_vis}]"
-        color = discord.Color.purple()
+        color = discord.Color.red() # 红色最强
     elif score >= 4:
         title = f"🚀 强势买入 (+{score}) [{bar_vis}]"
-        color = discord.Color.green()
+        color = discord.Color.orange()
     elif score >= 1:
         title = f"📈 趋势看多 (+{score}) [{bar_vis}]"
-        color = discord.Color.blue()
+        color = discord.Color.gold()
     elif score <= -8:
         title = f"💀 清仓快跑 ({score}) [{bar_vis}]"
-        color = discord.Color.dark_grey()
+        color = discord.Color.green() # 绿色最弱
     elif score <= -4:
         title = f"🩸 减仓止损 ({score}) [{bar_vis}]"
-        color = discord.Color.dark_red()
+        color = discord.Color.dark_teal()
     else:
         title = f"⚖️ 震荡观望 ({score})"
-        color = discord.Color.gold()
+        color = discord.Color.light_grey()
         
     return title, color
 
-# ================= FMP Stable 接口逻辑 =================
+# ================= FMP Stable 接口 =================
 
 def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
@@ -187,7 +189,6 @@ def get_daily_data_stable(ticker):
         print(f"❌ 数据处理异常 {ticker}: {e}")
         return None
 
-# 模糊查找列名
 def get_col(df, prefix):
     for col in df.columns:
         if str(col).startswith(prefix): return col
@@ -199,7 +200,7 @@ def analyze_daily_signals(ticker):
 
     signals = []
     
-    # --- 1. 计算指标 ---
+    # 计算指标
     df['nx_blue_up'] = df['high'].ewm(span=24, adjust=False).mean()
     df['nx_blue_dw'] = df['low'].ewm(span=23, adjust=False).mean()
     df['nx_yell_up'] = df['high'].ewm(span=89, adjust=False).mean()
@@ -223,8 +224,6 @@ def analyze_daily_signals(ticker):
     except: pass
     
     df['VOL_MA_20'] = df.ta.sma(close='volume', length=20)
-
-    # === ⚡️ 强制列名大写 ===
     df.columns = [str(c).upper() for c in df.columns]
 
     curr = df.iloc[-1]
@@ -246,9 +245,9 @@ def analyze_daily_signals(ticker):
             signals.append("🧗 Nx 突破双梯 (强力买入)")
         elif curr['CLOSE'] > curr['NX_BLUE_DW']:
             signals.append("🔒 Nx 站稳蓝梯 (持股待涨)")
-    if prev['CLOSE'] > prev['NX_BLUE_DW'] and curr['CLOSE'] < curr['NX_BLUE_DW']: signals.append(f"📉 Nx 跌破蓝梯下沿 (${curr['NX_BLUE_DW']:.2f})")
-    if curr['NX_BLUE_DW'] > curr['NX_YELL_UP']: signals.append("🌈 Nx 牛市排列")
-    elif curr['NX_YELL_DW'] > curr['NX_BLUE_UP']: signals.append("⚠️ Nx 熊市压制")
+    if prev['CLOSE'] > prev['NX_BLUE_DW'] and curr['CLOSE'] < curr['NX_BLUE_DW']: signals.append("📉 Nx 跌破蓝梯下沿 (卖出/减仓)")
+    if curr['NX_BLUE_DW'] > curr['NX_YELL_UP']: signals.append("🌈 Nx 牛市排列 (大趋势看涨)")
+    elif curr['NX_YELL_DW'] > curr['NX_BLUE_UP']: signals.append("⚠️ Nx 熊市压制 (大趋势看跌)")
 
     # --- B. 量能 ---
     tz_ny = pytz.timezone('America/New_York')
@@ -267,67 +266,64 @@ def analyze_daily_signals(ticker):
             rvol = curr['VOLUME'] / vol_ma
             if rvol > 2.0 and curr['CLOSE'] > prev['CLOSE']: signals.append(f"🔥 放量大涨 (量比:{rvol:.1f}x)")
             elif rvol > 2.0 and curr['CLOSE'] < prev['CLOSE']: signals.append(f"😰 放量大跌 (量比:{rvol:.1f}x)")
-            elif rvol < 0.6 and curr['CLOSE'] < prev['CLOSE']: signals.append(f"💤 缩量回调 (量比:{rvol:.1f}x)")
+            elif rvol < 0.6 and curr['CLOSE'] < prev['CLOSE']: signals.append("💤 缩量回调")
 
     # --- C. 支撑压力 ---
     if 'P_FIB_R1' in df.columns:
         if prev['CLOSE'] < curr['P_FIB_R1'] and curr['CLOSE'] > curr['P_FIB_R1']: signals.append(f"🚀 突破 R1 阻力 (${curr['P_FIB_R1']:.2f})")
         if prev['CLOSE'] > curr['P_FIB_S1'] and curr['CLOSE'] < curr['P_FIB_S1']: signals.append(f"📉 跌破 S1 支撑 (${curr['P_FIB_S1']:.2f})")
-    
-    if curr['CLOSE'] > prev['DCU_20_20']: signals.append(f"🧱 突破唐奇安上轨 (${prev['DCU_20_20']:.2f})")
-    if curr['CLOSE'] < prev['DCL_20_20']: signals.append(f"🕳️ 跌破唐奇安下轨 (${prev['DCL_20_20']:.2f})")
+    if curr['CLOSE'] > prev['DCU_20_20']: signals.append("🧱 突破唐奇安上轨")
+    if curr['CLOSE'] < prev['DCL_20_20']: signals.append("🕳️ 跌破唐奇安下轨")
 
     # --- D. 均线 ---
     if (curr['SMA_5'] > curr['SMA_10'] > curr['SMA_20'] > curr['SMA_60']): signals.append("🌈 均线多头排列")
     if (curr['SMA_5'] < curr['SMA_10'] < curr['SMA_20'] < curr['SMA_60']): signals.append("❄️ 均线空头排列")
-    
     for m in mas:
         if m == 30: continue
         ma_col = f'SMA_{m}'
         if ma_col in df.columns:
             if prev['CLOSE'] < prev[ma_col] and curr['CLOSE'] > curr[ma_col]:
-                if m == 200: signals.append(f"🐂 突破年线 MA200 (${curr[ma_col]:.2f})")
-                else: signals.append(f"📈 站上 MA{m} (${curr[ma_col]:.2f})")
+                if m == 200: signals.append("🐂 突破年线 (MA200)")
+                else: signals.append(f"📈 站上 MA{m}")
             elif prev['CLOSE'] > prev[ma_col] and curr['CLOSE'] < curr[ma_col]:
-                if m == 200: signals.append(f"🐻 跌破年线 MA200 (${curr[ma_col]:.2f})")
-                else: signals.append(f"📉 跌破 MA{m} (${curr[ma_col]:.2f})")
+                if m == 200: signals.append("🐻 跌破年线 (MA200)")
+                else: signals.append(f"📉 跌破 MA{m}")
 
-    # --- E. 震荡与动能 ---
-    if col_bbu and curr['CLOSE'] > curr[col_bbu]: signals.append(f"⚡ 突破布林上轨 (${curr[col_bbu]:.2f})")
-    if col_bbl and curr['CLOSE'] < curr[col_bbl]: signals.append(f"🩸 跌破布林下轨 (${curr[col_bbl]:.2f})")
+    # --- E. 震荡 ---
+    if col_bbu and curr['CLOSE'] > curr[col_bbu]: signals.append("⚡ 突破布林上轨")
+    if col_bbl and curr['CLOSE'] < curr[col_bbl]: signals.append("🩸 跌破布林下轨")
     if col_bbm:
         if prev['CLOSE'] < prev[col_bbm] and curr['CLOSE'] > curr[col_bbm]: signals.append("🛫 突破布林中轨")
         elif prev['CLOSE'] > prev[col_bbm] and curr['CLOSE'] < curr[col_bbm]: signals.append("📉 跌破布林中轨")
 
-    if curr['RSI_14'] > 75: signals.append(f"⚠️ RSI 超买 ({curr['RSI_14']:.1f})")
-    elif curr['RSI_14'] < 30: signals.append(f"💎 RSI 超卖 ({curr['RSI_14']:.1f})")
+    if curr['RSI_14'] > 75: signals.append(f"⚠️ RSI 超买")
+    elif curr['RSI_14'] < 30: signals.append(f"💎 RSI 超卖")
 
     if col_macd and col_sig:
         if prev[col_macd] < prev[col_sig] and curr[col_macd] > curr[col_sig]: signals.append("✨ MACD 金叉")
         elif prev[col_macd] > prev[col_sig] and curr[col_macd] < curr[col_sig]: signals.append("💀 MACD 死叉")
 
+    # 背离
     window = 20
     recent = df.iloc[-window:-1]
     if not recent.empty:
         if curr['CLOSE'] > recent['CLOSE'].max() and curr['RSI_14'] < recent['RSI_14'].max(): signals.append("📉 RSI 顶背离")
         if curr['CLOSE'] < recent['CLOSE'].min() and curr['RSI_14'] > recent['RSI_14'].min(): signals.append("📈 RSI 底背离")
-        
         if col_macd:
             if curr['CLOSE'] > recent['CLOSE'].max() and curr[col_macd] < recent[col_macd].max(): signals.append("📉 MACD 顶背离")
             if curr['CLOSE'] < recent['CLOSE'].min() and curr[col_macd] > recent[col_macd].min(): signals.append("📈 MACD 底背离")
-            
         if curr['CLOSE'] < recent['CLOSE'].min() and curr['OBV'] > recent['OBV'].min(): signals.append("💰 OBV 底背离")
         if curr['CLOSE'] > recent['CLOSE'].max() and curr['OBV'] < recent['OBV'].max(): signals.append("💸 OBV 顶背离")
 
     # KDJ / Other
     if 'K_9_3' in df.columns:
         k, d = 'K_9_3', 'D_9_3'
-        if prev[k] < prev[d] and curr[k] > curr[d] and curr[k] < 30: signals.append(f"💎 KDJ 低位金叉 (K:{curr[k]:.1f})")
+        if prev[k] < prev[d] and curr[k] > curr[d] and curr[k] < 30: signals.append("💎 KDJ 低位金叉")
     
-    if prev['WILLR_14'] < -80 and curr['WILLR_14'] > -80: signals.append(f"🎯 威廉指标 WR 触底 ({curr['WILLR_14']:.1f})")
-    if prev['WILLR_14'] > -20 and curr['WILLR_14'] < -20: signals.append(f"🛑 威廉指标 WR 见顶 ({curr['WILLR_14']:.1f})")
-    if prev['CCI_20_0.015'] < -100 and curr['CCI_20_0.015'] > -100: signals.append(f"🎣 CCI 超卖回升 ({curr['CCI_20_0.015']:.1f})")
-    if prev['ADX_14'] < 25 and curr['ADX_14'] > 25: signals.append(f"🌪️ ADX 趋势加速 ({curr['ADX_14']:.1f})")
+    if prev['WILLR_14'] < -80 and curr['WILLR_14'] > -80: signals.append("🎯 威廉指标 WR 触底")
+    if prev['WILLR_14'] > -20 and curr['WILLR_14'] < -20: signals.append("🛑 威廉指标 WR 见顶")
+    if prev['CCI_20_0.015'] < -100 and curr['CCI_20_0.015'] > -100: signals.append("🎣 CCI 超卖回升")
+    if prev['ADX_14'] < 25 and curr['ADX_14'] > 25: signals.append("🌪️ ADX 趋势加速")
 
     ma_short = ['NX_BLUE_UP', 'NX_BLUE_DW']
     if all(curr['OPEN'] > curr[m] for m in ma_short) and all(curr['CLOSE'] < curr[m] for m in ma_short):
@@ -349,18 +345,23 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ 数值增强版Bot已启动: {bot.user}')
+    print(f'✅ 红涨绿跌版Bot已启动: {bot.user}')
+    
     interval = bot_config.get('interval', 30)
     daily_monitor.change_interval(minutes=interval)
+    print(f"⏱️ 扫描间隔: {interval} 分钟")
+    
     await bot.tree.sync()
-    if not daily_monitor.is_running(): daily_monitor.start()
+    if not daily_monitor.is_running():
+        daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
     embed = discord.Embed(title="🤖 指令手册", color=discord.Color.blue())
     embed.add_field(name="⚙️ 设置", value="`/set_interval [分钟]` : 修改扫描频率", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码] [模式]` : 添加股票\n`/remove [代码]` : 删除股票\n`/list` : 查看列表", inline=False)
-    embed.add_field(name="📚 战法", value="`/alert_types` : 查看战法说明", inline=False)
+    embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析一只股票", inline=False)
+    embed.add_field(name="📚 战法", value="`/alert_types` : 查看技术指标说明", inline=False)
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="set_interval", description="设置扫描间隔")
@@ -374,12 +375,49 @@ async def set_interval(interaction: discord.Interaction, minutes: int):
 @bot.tree.command(name="alert_types", description="查看战法说明")
 async def show_alert_types(interaction: discord.Interaction):
     embed = discord.Embed(title="📊 战法指标库", color=discord.Color.gold())
-    embed.add_field(name="🧗 Nx战法", value="Nx双梯突破/跌破、牛熊排列", inline=False)
+    embed.add_field(name="🧗 Nx战法", value="Nx双梯突破、跌破、牛熊排列", inline=False)
     embed.add_field(name="🔥 资金量能", value="盘中爆量、放量涨跌、OBV背离", inline=False)
     embed.add_field(name="📈 趋势均线", value="MA5-200突破、多空排列、ADX", inline=False)
     embed.add_field(name="🔄 动能震荡", value="MACD/RSI/KDJ/WR/CCI 信号", inline=False)
     embed.add_field(name="🧱 支撑压力", value="唐奇安通道、斐波那契Pivot、布林带", inline=False)
     await interaction.response.send_message(embed=embed)
+
+# --- 🆕 新增临时查询指令 ---
+@bot.tree.command(name="check", description="立刻分析一只股票 (无需添加到列表)")
+@app_commands.describe(ticker="股票代码 (如 TSLA)")
+async def check_stock(interaction: discord.Interaction, ticker: str):
+    await interaction.response.defer()
+    ticker = ticker.upper()
+    
+    price, signals = analyze_daily_signals(ticker)
+    
+    if price is None:
+        await interaction.followup.send(f"❌ 无法获取 {ticker} 数据，请检查代码或 API。")
+        return
+
+    if not signals:
+        signals.append("趋势平稳，暂无异动")
+
+    title, color = calculate_sentiment_score(signals)
+    
+    desc_lines = []
+    for s in signals:
+        advice = get_signal_advice(s)
+        desc_lines.append(f"### {s}")
+        if advice: desc_lines.append(f"> {advice}\n")
+    
+    desc_final = "\n".join(desc_lines)
+
+    embed = discord.Embed(
+        title=f"{title} : {ticker}",
+        description=f"**现价**: ${price:.2f}\n\n{desc_final}",
+        color=color
+    )
+    embed.set_image(url=get_finviz_chart_url(ticker))
+    embed.timestamp = datetime.datetime.now()
+    embed.set_footer(text="FMP Stable API • 临时查询")
+    
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="add", description="添加监控")
 @app_commands.choices(mode=[app_commands.Choice(name="每日一次", value="once_daily"), app_commands.Choice(name="总是提醒", value="always")])
@@ -404,9 +442,15 @@ async def list_stocks(interaction: discord.Interaction):
     embed = discord.Embed(title="📋 监控面板", color=discord.Color.blue())
     lines = []
     for ticker, data in watch_data.items():
-        icon = "📅" if data['mode'] == "once_daily" else "🔔"
-        sig_str = " | ".join(data.get('last_signals', [])) or "等待扫描..."
-        lines.append(f"**{ticker}** {icon}\n└ {sig_str}")
+        # 计算当前评分，显示在列表里
+        sigs = data.get('last_signals', [])
+        title, _ = calculate_sentiment_score(sigs)
+        # title 格式: [■■■] +6 极度强势
+        # 我们只需要后面的部分，或者直接用整个 title
+        
+        current_sig_str = " | ".join(sigs) if sigs else "等待扫描..."
+        lines.append(f"**{ticker}** {title}\n└ {current_sig_str}")
+        
     embed.description = "\n\n".join(lines)[:4000]
     await interaction.response.send_message(embed=embed)
 
@@ -431,6 +475,7 @@ async def daily_monitor():
             if should_alert:
                 watch_data[ticker]['last_alert_date'] = today
                 save_data()
+                
                 title, color = calculate_sentiment_score(signals)
                 desc_lines = []
                 for s in signals:
@@ -438,7 +483,12 @@ async def daily_monitor():
                     desc_lines.append(f"### {s}")
                     if advice: desc_lines.append(f"> {advice}\n")
                 desc_final = "\n".join(desc_lines)
-                embed = discord.Embed(title=f"{title} : {ticker}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
+
+                embed = discord.Embed(
+                    title=f"{title} : {ticker}",
+                    description=f"**现价**: ${price:.2f}\n\n{desc_final}",
+                    color=color
+                )
                 embed.set_image(url=get_finviz_chart_url(ticker))
                 embed.timestamp = datetime.datetime.now()
                 embed.set_footer(text="FMP Stable API • David Nx战法")
