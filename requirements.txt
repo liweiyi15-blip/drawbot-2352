@@ -1,2 +1,5 @@
 discord.py
-yfinance
+requests
+pandas
+pandas_ta
+numpy
