@@ -13,6 +13,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0'))
 FMP_API_KEY = os.getenv('FMP_API_KEY') 
 
+# 监控列表
 WATCHLIST = ['TSLA', 'NVDA', 'AAPL', 'AMD', 'MSFT', 'COIN', 'MSTR', 'GOOGL', 'AMZN', 'META']
 
 alert_cooldown = {}
@@ -24,46 +25,59 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # ================= 数据与计算逻辑 =================
 
 def get_finviz_chart_url(ticker):
+    """ 生成 Finviz 图表链接作为配图 """
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
 def get_fmp_data(ticker):
-    """ 从 FMP 获取 15分钟 K线数据 """
-    # 打印 Key 的前几位，检查是否读取成功 (安全起见不打印全)
+    """ 
+    从 FMP 获取 15分钟 K线数据 (适配新版 /stable/ 接口)
+    """
     if not FMP_API_KEY:
         print(f"❌ 错误: 未检测到 FMP_API_KEY 环境变量！")
         return None
         
-    url = f"https://financialmodelingprep.com/api/v3/historical-chart/15min/{ticker}?apikey={FMP_API_KEY}"
+    # --- 关键修改：使用新的 /stable/ 接口结构 ---
+    # 旧版: /api/v3/historical-chart/15min/{ticker}
+    # 新版: /stable/historical-chart/15min?symbol={ticker}
+    url = f"https://financialmodelingprep.com/stable/historical-chart/15min?symbol={ticker}&apikey={FMP_API_KEY}"
+    
     try:
         response = requests.get(url, timeout=10)
         
-        # --- 新增：调试信息 ---
         if response.status_code != 200:
             print(f"❌ FMP API 报错 {ticker}: 状态码 {response.status_code} - {response.text}")
             return None
             
         data = response.json()
         if not data:
-            print(f"⚠️ FMP 返回空数据 {ticker} (可能是周末或Ticker错误)")
+            print(f"⚠️ FMP 返回空数据 {ticker} (可能是非交易时间或代码错误)")
             return None
         
+        # 检查是否包含错误信息
         if isinstance(data, dict) and "Error Message" in data:
             print(f"❌ FMP 权限错误: {data['Error Message']}")
             return None
             
+        # 转换为 DataFrame
         df = pd.DataFrame(data)
+        
+        # FMP 新版接口返回的数据通常也是倒序的(最新在前)，需要反转
         df = df.iloc[::-1].reset_index(drop=True) 
+        
+        # 确保列名统一 (FMP 返回的是 date, open, high, low, close, volume)
+        # pandas_ta通常能自动识别，但为了保险起见，不强制重命名，除非列名不对
+        
         return df
     except Exception as e:
         print(f"❌ 数据获取异常 {ticker}: {e}")
         return None
 
 def calculate_signals(ticker):
+    """ 核心量化逻辑：计算所有指标并返回信号 """
     df = get_fmp_data(ticker)
     
-    # --- 修复点：如果 df 是 None，直接返回 None, None ---
-    # 之前这里返回了错误文本，导致后续代码以为有数据
+    # 判空保护
     if df is None or len(df) < 50: 
         return None, None
 
@@ -71,61 +85,76 @@ def calculate_signals(ticker):
     try:
         price = df['close'].iloc[-1]
         
-        # 1. 计算指标
+        # --- 1. 计算指标 (Pandas TA) ---
         mas = [5, 10, 20, 60, 120, 250]
         for m in mas:
             df.ta.sma(length=m, append=True)
+        
         df.ta.bbands(length=20, std=2, append=True)
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.kdj(length=9, signal=3, append=True)
         df.ta.rsi(length=14, append=True)
         df['VOL_MA_20'] = df.ta.sma(close='volume', length=20)
 
-        # 2. 信号判断
+        # --- 2. 信号判断 ---
         curr = df.iloc[-1]
         prev = df.iloc[-2]
 
+        # A. 均线系统
         for m in mas:
             ma_col = f'SMA_{m}'
             if ma_col in df.columns:
-                if prev['close'] < prev[ma_col] and curr['close'] > curr[ma_col]:
-                    signals.append(f"📈 突破 MA{m}")
-                elif prev['close'] > prev[ma_col] and curr['close'] < curr[ma_col]:
-                    signals.append(f"📉 跌破 MA{m}")
+                if pd.notna(prev[ma_col]) and pd.notna(curr[ma_col]):
+                    if prev['close'] < prev[ma_col] and curr['close'] > curr[ma_col]:
+                        signals.append(f"📈 突破 MA{m}")
+                    elif prev['close'] > prev[ma_col] and curr['close'] < curr[ma_col]:
+                        signals.append(f"📉 跌破 MA{m}")
 
-        bbu, bbl = 'BBU_20_2.0', 'BBL_20_2.0'
-        if curr['close'] > curr[bbu] and prev['close'] <= prev[bbu]:
-            signals.append("🚀 突破布林上轨")
-        elif curr['close'] < curr[bbl] and prev['close'] >= prev[bbl]:
-            signals.append("🩸 跌破布林下轨")
+        # B. 布林带
+        bbu = 'BBU_20_2.0'
+        bbl = 'BBL_20_2.0'
+        if bbu in df.columns and bbl in df.columns:
+            if curr['close'] > curr[bbu] and prev['close'] <= prev[bbu]:
+                signals.append("🚀 突破布林上轨")
+            elif curr['close'] < curr[bbl] and prev['close'] >= prev[bbl]:
+                signals.append("🩸 跌破布林下轨")
 
-        macd, signal = 'MACD_12_26_9', 'MACDs_12_26_9'
-        if prev[macd] < prev[signal] and curr[macd] > curr[signal]:
-            signals.append("✨ MACD 金叉")
-        if prev[macd] > prev[signal] and curr[macd] < curr[signal]:
-            signals.append("💀 MACD 死叉")
+        # C. MACD
+        macd_line = 'MACD_12_26_9'
+        signal_line = 'MACDs_12_26_9'
+        if macd_line in df.columns and signal_line in df.columns:
+            if prev[macd_line] < prev[signal_line] and curr[macd_line] > curr[signal_line]:
+                signals.append("✨ MACD 金叉")
+            if prev[macd_line] > prev[signal_line] and curr[macd_line] < curr[signal_line]:
+                signals.append("💀 MACD 死叉")
 
-        rsi_val = curr['RSI_14']
-        if rsi_val > 75:
-            signals.append(f"⚠️ RSI 超买 ({rsi_val:.1f})")
-        elif rsi_val < 25:
-            signals.append(f"💎 RSI 超卖 ({rsi_val:.1f})")
+        # D. RSI
+        if 'RSI_14' in df.columns:
+            rsi_val = curr['RSI_14']
+            if rsi_val > 75:
+                signals.append(f"⚠️ RSI 超买 ({rsi_val:.1f})")
+            elif rsi_val < 25:
+                signals.append(f"💎 RSI 超卖 ({rsi_val:.1f})")
         
-        k, d = curr['K_9_3'], curr['D_9_3']
-        prev_k, prev_d = prev['K_9_3'], prev['D_9_3']
-        if prev_k < prev_d and k > d and k < 20:
-            signals.append("⚡ KDJ 低位金叉")
+        # E. KDJ
+        if 'K_9_3' in df.columns and 'D_9_3' in df.columns:
+            k, d = curr['K_9_3'], curr['D_9_3']
+            prev_k, prev_d = prev['K_9_3'], prev['D_9_3']
+            if prev_k < prev_d and k > d and k < 20:
+                signals.append("⚡ KDJ 低位金叉")
         
-        if curr['volume'] > (curr['VOL_MA_20'] * 2.5):
-            if curr['close'] > prev['close']:
-                signals.append("🔥 巨量拉升")
-            else:
-                signals.append("😰 巨量砸盘")
+        # F. 量能
+        if 'VOL_MA_20' in df.columns and pd.notna(curr['VOL_MA_20']):
+            if curr['volume'] > (curr['VOL_MA_20'] * 2.5):
+                if curr['close'] > prev['close']:
+                    signals.append("🔥 巨量拉升")
+                else:
+                    signals.append("😰 巨量砸盘")
 
         return price, signals
         
     except Exception as e:
-        print(f"指标计算错误 {ticker}: {e}")
+        print(f"❌ 指标计算错误 {ticker}: {e}")
         return None, None
 
 # ================= Bot 事件与指令 =================
@@ -150,9 +179,8 @@ async def test_signal(interaction: discord.Interaction, ticker: str):
     ticker = ticker.upper()
     price, signals = calculate_signals(ticker)
     
-    # --- 修复点：判空处理 ---
     if price is None:
-        await interaction.followup.send(f"❌ 获取 {ticker} 数据失败，请查看后台日志。")
+        await interaction.followup.send(f"❌ 暂时无法获取 {ticker} 数据，请检查后台日志。")
         return
 
     if not signals:
@@ -162,12 +190,12 @@ async def test_signal(interaction: discord.Interaction, ticker: str):
     color = discord.Color.green() if "突破" in desc or "金叉" in desc else discord.Color.gold()
     
     embed = discord.Embed(
-        title=f"🔍 手动分析: {ticker}",
+        title=f"🔍 FMP分析: {ticker}",
         description=f"**现价**: ${price:.2f}\n\n**当前信号**:\n{desc}",
         color=color
     )
     embed.set_image(url=get_finviz_chart_url(ticker))
-    embed.set_footer(text="基于 FMP 15分钟数据 • 立即生成")
+    embed.set_footer(text="数据源: FMP Stable API • 15分钟周期")
     await interaction.followup.send(embed=embed)
 
 @tasks.loop(minutes=15)
@@ -181,10 +209,7 @@ async def scanner_task():
         try:
             price, signals = calculate_signals(ticker)
             
-            # --- 修复点：严谨的判空逻辑 ---
-            # 只有当 price 有值，且 signals 不为空时才处理
             if price is not None and signals:
-                
                 # 冷却检查
                 now = datetime.datetime.now()
                 if ticker in alert_cooldown:
@@ -194,9 +219,8 @@ async def scanner_task():
                 alert_cooldown[ticker] = now
                 
                 desc = "\n".join([f"• {s}" for s in signals])
-                color = discord.Color.red() if "跌" in desc or "死叉" in desc else discord.Color.green()
+                color = discord.Color.red() if "跌" in desc or "死叉" in desc or "砸盘" in desc else discord.Color.green()
                 
-                # 这里就是之前报错的地方，现在安全了
                 embed = discord.Embed(
                     title=f"⚡ 自动警报: {ticker}",
                     description=f"**现价**: ${price:.2f}\n\n{desc}",
@@ -209,7 +233,6 @@ async def scanner_task():
                 await asyncio.sleep(2)
                 
         except Exception as e:
-            # 这里会捕获其他未知的错误，防止 Loop 停止
             print(f"Error scanning {ticker}: {e}")
 
 bot.run(TOKEN)
