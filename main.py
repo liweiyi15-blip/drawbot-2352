@@ -1,48 +1,27 @@
-import discord
-from discord.ext import commands, tasks
-import random
-import datetime
-import os # 引入os库读取环境变量
-
-# --- 从环境变量读取配置 (安全做法) ---
-TOKEN = os.getenv('DISCORD_TOKEN') 
-CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0')) # 默认为0，防止报错
-
-HOT_STOCKS = ['TSLA', 'NVDA', 'AAPL', 'AMD', 'MSFT', 'COIN', 'MSTR', 'AMZN', 'GOOGL', 'META']
-
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='/', intents=intents)
-
-def get_finviz_chart_url(ticker):
-    timestamp = int(datetime.datetime.now().timestamp())
-    return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
-
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user}')
-    if CHANNEL_ID != 0 and not auto_post_analysis.is_running():
-        auto_post_analysis.start()
-    else:
-        print("警告: 未设置 CHANNEL_ID，自动推送未启动。")
-
-@bot.command(name='ta')
-async def technical_analysis(ctx, ticker: str):
+# --- 新增：周末/休市专用模拟指令 ---
+@bot.command(name='sim')
+async def simulate_alert(ctx, ticker: str = "TSLA"):
+    """
+    用法: /sim 或 /sim NVDA
+    强制模拟一个报警信号，用于周末测试样式
+    """
     ticker = ticker.upper()
+    
+    # 1. 伪造一些假数据
+    fake_price = 123.45
+    fake_change = 5.88 # 假装今天涨了 5.88%
+    
+    # 2. 生成真实的 Finviz 图表 (图表是真实的，显示的是周五收盘的状态)
     chart_url = get_finviz_chart_url(ticker)
-    embed = discord.Embed(title=f"📈 {ticker} 技术分析", color=discord.Color.gold())
+    
+    # 3. 构造 Embed (和真实报警一模一样)
+    embed = discord.Embed(
+        title=f"🚀 [模拟测试] 异动警报: {ticker} 暴力拉升",
+        description=f"**当前涨幅**: +{fake_change}%\n**现价**: ${fake_price}\n\n⚠️ 注意：这是手动触发的测试消息，非实时行情。",
+        color=discord.Color.green()
+    )
     embed.set_image(url=chart_url)
-    embed.set_footer(text="来源: Finviz")
+    embed.set_footer(text="监控阈值: ±TEST% • 模拟触发")
+    embed.timestamp = datetime.datetime.now()
+    
     await ctx.send(embed=embed)
-
-@tasks.loop(hours=4)
-async def auto_post_analysis():
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel:
-        ticker = random.choice(HOT_STOCKS)
-        embed = discord.Embed(title=f"🔥 热门异动推送: {ticker}", color=discord.Color.red())
-        embed.set_image(url=get_finviz_chart_url(ticker))
-        embed.timestamp = datetime.datetime.now()
-        await channel.send(embed=embed)
-
-bot.run(TOKEN)
