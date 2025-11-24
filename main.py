@@ -28,7 +28,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 watch_data = {}
-# 统计系统覆盖的总指标判定点数量 (多空双向)
+# 统计系统覆盖的总指标判定点数量
 TOTAL_CHECK_POINTS = 85 
 
 # ================= 数据存取 =================
@@ -49,7 +49,7 @@ def save_data():
         with open(DATA_FILE, 'w') as f: json.dump(watch_data, f, indent=4)
     except Exception as e: print(f"❌ 保存失败: {e}")
 
-# ================= 🧠 全战法说明书 (V23.0) =================
+# ================= 🧠 全战法说明书 =================
 def get_signal_advice(t):
     advice = ""
     # --- 0. 估值/事件 ---
@@ -125,7 +125,7 @@ def get_signal_advice(t):
     
     return advice
 
-# ================= ⚖️ 评分系统 (V23.0) =================
+# ================= ⚖️ 评分系统 =================
 def get_signal_category_and_score(s):
     s = s.strip()
     
@@ -155,17 +155,17 @@ def get_signal_category_and_score(s):
     if any(x in s for x in ["早晨", "阳包阴", "锤子"]): return 'pattern', 1.0
     if any(x in s for x in ["断头", "阴包阳", "射击", "黄昏", "墓碑"]): return 'pattern', -1.0
 
-    # 3. 择时 (Timing)
+    # 3. 择时
     if "九转" in s or "十三转" in s:
         return 'timing', 2.0 if ("买入" in s or "底部" in s) else -2.0
         
-    # 4. 资金 (Volume)
+    # 4. 资金
     if "VWAP" in s: return 'volume', 1.0 if "站上" in s else -1.0
     if "盘中爆量" in s: return 'volume', 2.0 if "抢筹" in s else -2.0
     if "放量" in s: return 'volume', 1.0 if "大涨" in s else -1.0
     if "缩量" in s: return 'volume', 1.0 if "回调" in s else -1.0
     
-    # 5. 趋势 (Trend)
+    # 5. 趋势
     if "Supertrend" in s: return 'trend', 1.5 if "看多" in s else -1.5
     if "ADX" in s: return 'trend', 1.0
     if "黄金交叉" in s: return 'trend', 1.5
@@ -177,7 +177,7 @@ def get_signal_category_and_score(s):
     if "站上" in s: return 'trend', 0.5
     if "跌破" in s: return 'trend', -0.5
     
-    # 6. 摆动 (Oscillator)
+    # 6. 摆动
     if "背离" in s: return 'oscillator', 1.5 if "底" in s else -1.5
     if "反钩" in s: return 'oscillator', 1.0
     if "金叉" in s or "布林" in s or "超卖" in s or "CCI 超卖" in s or "WillR 超卖" in s: return 'oscillator', 0.5
@@ -194,6 +194,7 @@ def generate_report_content(signals):
         cat, score = get_signal_category_and_score(s)
         items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
+    # 激活逻辑
     for item in items:
         if item['cat'] in ['volume', 'timing', 'fundamental']:
             item['active'] = True
@@ -278,7 +279,7 @@ def get_valuation_and_earnings(ticker, current_price):
                         diff = (parser.parse(d_str).date() - today).days
                         if 0 <= diff <= 14: sigs.append(f"财报预警 (T-{diff}天)")
                         break 
-
+        
         # 2. 华尔街共识
         rec_url = f"https://financialmodelingprep.com/stable/analyst-stock-recommendations?symbol={ticker}&apikey={FMP_API_KEY}"
         rec_resp = requests.get(rec_url, timeout=10)
@@ -331,15 +332,15 @@ def get_valuation_and_earnings(ticker, current_price):
 
         if eps_ttm > 0:
             if current_peg:
-                if 0 < current_peg < 1.3: sigs.append(f"PEG 低估: {current_peg:.2f}")
-                elif current_peg > 3.5: sigs.append(f"PEG 溢价: {current_peg:.2f}")
+                if 0 < current_peg < 1.3: sigs.append(f"PEG 低估 ({current_peg:.2f})")
+                elif current_peg > 3.5: sigs.append(f"PEG 溢价 ({current_peg:.2f})")
             if current_pe and avg_pe > 0:
-                if current_pe < avg_pe * 0.8: sigs.append(f"PE 历史低位: {current_pe:.1f} [均值 {avg_pe:.1f}]")
-                elif current_pe > avg_pe * 1.3: sigs.append(f"PE 历史高位: {current_pe:.1f} [均值 {avg_pe:.1f}]")
+                if current_pe < avg_pe * 0.8: sigs.append(f"PE 历史低位 ({current_pe:.1f} [均值 {avg_pe:.1f}])")
+                elif current_pe > avg_pe * 1.3: sigs.append(f"PE 历史高位 ({current_pe:.1f} [均值 {avg_pe:.1f}])")
         else:
             if current_ps and avg_ps > 0:
-                if current_ps < avg_ps * 0.8: sigs.append(f"PS 历史低位: {current_ps:.2f} [均值 {avg_ps:.2f}]")
-                elif current_ps > avg_ps * 1.3: sigs.append(f"PS 历史高位: {current_ps:.2f} [均值 {avg_ps:.2f}]")
+                if current_ps < avg_ps * 0.8: sigs.append(f"PS 历史低位 ({current_ps:.2f} [均值 {avg_ps:.2f}])")
+                elif current_ps > avg_ps * 1.3: sigs.append(f"PS 历史高位 ({current_ps:.2f} [均值 {avg_ps:.2f}])")
 
         # 6. DCF
         d_url = f"https://financialmodelingprep.com/stable/discounted-cash-flow?symbol={ticker}&apikey={FMP_API_KEY}"
@@ -349,8 +350,8 @@ def get_valuation_and_earnings(ticker, current_price):
             if d_data and 'dcf' in d_data[0]:
                 dcf = d_data[0]['dcf']
                 if dcf > 0:
-                    if current_price < dcf * 0.85: sigs.append(f"DCF 低估: ${dcf:.1f}")
-                    elif current_price > dcf * 2.0: sigs.append(f"DCF 溢价: ${dcf:.1f}")
+                    if current_price < dcf * 0.85: sigs.append(f"DCF 低估 (${dcf:.1f})")
+                    elif current_price > dcf * 2.0: sigs.append(f"DCF 溢价 (${dcf:.1f})")
     except: pass
     return sigs
 
@@ -443,13 +444,13 @@ def analyze_daily_signals(ticker):
                 name = "年线" if m == 200 else f"MA{m}"
                 signals.append(f"跌破 {name} ({curr[c]:.2f})")
 
-    # 2. 波动/资金/期权
+    # 2. 波动/资金
     if 'HV' in df.columns:
         curr_hv = curr['HV']
         if curr_hv < 20:
             if curr['CLOSE'] > curr['SMA_20']: signals.append(f"HV 蓄势看多 ({curr_hv:.1f})")
             else: signals.append(f"HV 蓄势看空 ({curr_hv:.1f})")
-        elif curr_hv > 80: # 新增高波逻辑
+        elif curr_hv > 80: # V23.0 新增高波动率判定
             if curr['CLOSE'] < curr['SMA_20']: signals.append(f"HV 恐慌极值 ({curr_hv:.1f})")
             else: signals.append(f"HV 高潮极值 ({curr_hv:.1f})")
 
@@ -573,13 +574,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V23.1 后台监控版Bot已启动: {bot.user}')
+    print(f'✅ V23.2 异步防卡死版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V23.1)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V23.2)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
@@ -591,10 +592,13 @@ async def help_bot(interaction: discord.Interaction):
 async def check_stocks(interaction: discord.Interaction, tickers: str):
     await interaction.response.defer()
     stock_list = tickers.upper().replace(',', ' ').split()[:5]
+    loop = asyncio.get_running_loop()
+    
     for ticker in stock_list:
-        start_time = time.time()
         try:
-            price, signals = analyze_daily_signals(ticker)
+            # ⚡ 核心修复：使用线程池执行耗时任务，防止心跳阻塞
+            price, signals = await loop.run_in_executor(None, analyze_daily_signals, ticker)
+            
             if price is None:
                 await interaction.followup.send(f"❌ 无法获取 {ticker} 数据 (可能是代码错误或FMP无数据)")
                 continue
@@ -610,14 +614,8 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
             embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
             
             await interaction.followup.send(embed=embed)
-            
-            # 后台日志
-            elapsed = time.time() - start_time
-            print(f"📊 [ANALYSIS] {ticker}: Score={score} | Signals={len(signals)}/{TOTAL_CHECK_POINTS} | Time={elapsed:.2f}s")
-            
         except Exception as e:
             await interaction.followup.send(f"⚠️ 分析 {ticker} 时发生错误: {e}")
-            print(f"❌ [ERROR] {ticker}: {e}")
 
 @bot.tree.command(name="add", description="添加个人监控")
 @app_commands.choices(mode=[app_commands.Choice(name="每日一次", value="once_daily"), app_commands.Choice(name="总是提醒", value="always")])
@@ -672,13 +670,16 @@ async def daily_monitor():
     print(f"🔎 启动收盘扫描: {today} (美东 16:01)")
     
     ny_now_str = datetime.datetime.now(ny_tz).strftime('%H:%M')
+    loop = asyncio.get_running_loop()
 
     for user_id, stocks in watch_data.items():
         user_alerts = []
         for ticker, data in stocks.items():
             try:
                 start_time = time.time()
-                price, signals = analyze_daily_signals(ticker)
+                # ⚡ 核心修复：异步执行分析
+                price, signals = await loop.run_in_executor(None, analyze_daily_signals, ticker)
+                
                 if signals:
                     score, desc_final = generate_report_content(signals)
                     should_alert = False
@@ -694,9 +695,8 @@ async def daily_monitor():
                         embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_now_str}")
                         user_alerts.append(embed)
                         
-                        # 后台日志
                         elapsed = time.time() - start_time
-                        print(f"📊 [MONITOR] {ticker}: Score={score} | Signals={len(signals)}/{TOTAL_CHECK_POINTS} | Time={elapsed:.2f}s")
+                        print(f"📊 [MONITOR] {ticker}: Score={score:.1f} | Time={elapsed:.2f}s")
 
             except Exception as e: print(f"Error {ticker}: {e}")
         if user_alerts:
