@@ -26,7 +26,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # 数据结构: { "USER_ID": { "TSLA": {...}, "NVDA": {...} } }
 watch_data = {}
 
-# ================= 数据存取 =================
+# ================= 数据存取 (用户隔离) =================
 def load_data():
     global watch_data
     if os.path.exists(DATA_FILE):
@@ -45,19 +45,26 @@ def save_data():
         with open(DATA_FILE, 'w') as f: json.dump(watch_data, f, indent=4)
     except Exception as e: print(f"❌ 保存失败: {e}")
 
-# ================= ⚖️ 评分系统 =================
+# ================= ⚖️ 机构级客观评分系统 (V5.2 去重版) =================
 def get_signal_category_and_score(s):
     s = s.strip()
+    # 1. ⏳ 择时 (Timing)
     if "九转" in s or "十三转" in s:
         if "买入" in s or "底部" in s: return 'timing', 4
         if "卖出" in s or "顶部" in s: return 'timing', -4
+
+    # 2. 💰 资金/量能 (Volume)
     if "盘中爆量" in s: return 'volume', 4 if "抢筹" in s else -4
     if "放量" in s: return 'volume', 3 if "大涨" in s else -3
     if "缩量" in s: return 'volume', 1 if "回调" in s else -1
+
+    # 3. 🕯️ K线形态 (Pattern) - 互斥
     p_bull = ["早晨之星", "阳包阴", "锤子"]
     p_bear = ["断头铡刀", "阴包阳", "射击之星", "黄昏之星", "墓碑"]
     if any(x in s for x in p_bull): return 'pattern', 4
     if any(x in s for x in p_bear): return 'pattern', -4
+
+    # 4. 📈 趋势/结构 (Trend) - 互斥
     t_bull_3 = ["多头排列", "突破年线", "突破唐奇安"]
     t_bear_3 = ["空头排列", "跌破年线", "跌破唐奇安"]
     t_bull_2 = ["Nx 突破", "Nx 站稳", "Nx 牛市", "突破 R1"]
@@ -70,6 +77,8 @@ def get_signal_category_and_score(s):
     if any(x in s for x in t_bear_2): return 'trend', -2
     if any(x in s for x in t_bull_1): return 'trend', 1
     if any(x in s for x in t_bear_1): return 'trend', -1
+
+    # 5. 🌊 摆动/情绪 (Oscillator) - 互斥
     o_bull_3 = ["底背离"]; o_bear_3 = ["顶背离"]
     o_bull_2 = ["MACD 金叉", "突破布林", "ADX"]; o_bear_2 = ["MACD 死叉", "跌破布林"]
     o_bull_1 = ["超卖", "触底", "回升", "KDJ 低位"]; o_bear_1 = ["超买", "见顶", "滞涨"]
@@ -86,7 +95,9 @@ def calculate_total_score(signals):
     for s in signals:
         cat, score = get_signal_category_and_score(s)
         if cat in scores and score != 0: scores[cat].append(score)
+    
     total = 0
+    # 同类取最大，异类相加
     if scores['trend']: total += max(scores['trend'], key=abs)
     if scores['pattern']: total += max(scores['pattern'], key=abs)
     if scores['oscillator']: total += max(scores['oscillator'], key=abs)
@@ -102,6 +113,7 @@ def format_dashboard_title(score):
     count = int(min(abs(score), 8))
     icons = "⭐" * count if score > 0 else "💀" * count if score < 0 else "⚖️"
     status, color = "震荡", discord.Color.light_grey()
+    
     if score >= 8: status, color = "史诗暴涨", discord.Color.from_rgb(255, 0, 0)
     elif score >= 4: status, color = "极度强势", discord.Color.red()
     elif score >= 1: status, color = "趋势看多", discord.Color.orange()
@@ -109,9 +121,10 @@ def format_dashboard_title(score):
     elif score <= -4: status, color = "极度高危", discord.Color.green()
     elif score <= -1: status, color = "趋势看空", discord.Color.dark_teal()
     else: status, color = "震荡整理", discord.Color.gold()
+        
     return f"{status} ({score:+}) {icons}", color
 
-# ================= FMP API =================
+# ================= FMP Ultimate API =================
 def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
@@ -121,19 +134,24 @@ def get_daily_data_stable(ticker):
     try:
         hist_url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={ticker}&apikey={FMP_API_KEY}"
         hist_resp = requests.get(hist_url, timeout=10)
+        
         if hist_resp.status_code != 200: return None
         hist_data = hist_resp.json()
         if not hist_data: return None
+        
         df = pd.DataFrame(hist_data)
         df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
         df = df.iloc[::-1].reset_index(drop=True)
+        
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         quote_resp = requests.get(quote_url, timeout=5)
         quote_data = quote_resp.json()
         if not quote_data: return None
+        
         curr = quote_data[0]
         today_str = datetime.datetime.now().strftime('%Y-%m-%d')
         last_hist_date = df['date'].iloc[-1]
+        
         if last_hist_date == today_str:
             idx = df.index[-1]
             df.loc[idx, 'close'] = curr['price']
@@ -141,8 +159,13 @@ def get_daily_data_stable(ticker):
             df.loc[idx, 'low'] = min(df.loc[idx, 'low'], curr['price'])
             df.loc[idx, 'volume'] = curr.get('volume', df.loc[idx, 'volume'])
         else:
-            new_row = {'date': today_str, 'open': curr.get('open', df['close'].iloc[-1]), 'high': curr.get('dayHigh', curr['price']), 'low': curr.get('dayLow', curr['price']), 'close': curr['price'], 'volume': curr.get('volume', 0)}
+            new_row = {
+                'date': today_str, 'open': curr.get('open', df['close'].iloc[-1]),
+                'high': curr.get('dayHigh', curr['price']), 'low': curr.get('dayLow', curr['price']),
+                'close': curr['price'], 'volume': curr.get('volume', 0)
+            }
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            
         df['date'] = pd.to_datetime(df['date'])
         df.set_index('date', inplace=True)
         return df
@@ -155,7 +178,7 @@ def analyze_daily_signals(ticker):
     if df is None or len(df) < 250: return None, None
     signals = []
     
-    # ------------------ 常规指标计算 ------------------
+    # ------------------ 指标计算 ------------------
     df['nx_blue_up'] = df['high'].ewm(span=24, adjust=False).mean()
     df['nx_blue_dw'] = df['low'].ewm(span=23, adjust=False).mean()
     df['nx_yell_up'] = df['high'].ewm(span=89, adjust=False).mean()
@@ -183,48 +206,32 @@ def analyze_daily_signals(ticker):
 
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
-
-    # ================= 🛡️ 手动计算神奇九转 (TD Setup) =================
-    # 解决 AttributeError: 'AnalysisIndicators' object has no attribute 'td_seq'
-    # 逻辑：收盘价连续9天 高于/低于 4天前的收盘价
     
+    # ================= ✅ 原生库计算九转/十三转 =================
     try:
-        # 只取最近20天计算，保证效率
-        recent_df = df.iloc[-20:].copy()
-        close_prices = recent_df['CLOSE'].values
+        # 这里完全依赖 pandas_ta 的开发版功能
+        df.ta.td_seq(append=True)
         
-        # 初始化计数器
-        td_buy_setup = 0  # 连续下跌 (Close < Close_4)
-        td_sell_setup = 0 # 连续上涨 (Close > Close_4)
+        # 1. 检查神奇九转 (Setup 9)
+        col_setup = 'TD_SEQ_SETUP'
+        if col_setup in df.columns:
+            if prev[col_setup] < 9 and curr[col_setup] == 9:
+                if curr['CLOSE'] < curr['OPEN']: signals.append("神奇九转: 底部买入信号 (9)")
+                else: signals.append("神奇九转: 顶部卖出信号 (9)")
         
-        # 遍历最近的K线
-        for i in range(4, len(close_prices)):
-            # 今天的收盘 vs 4天前的收盘
-            curr_c = close_prices[i]
-            shift4_c = close_prices[i-4]
-            
-            # 卖出结构 (Red 9) - 连续上涨
-            if curr_c > shift4_c:
-                td_sell_setup += 1
-                td_buy_setup = 0
-            # 买入结构 (Green 9) - 连续下跌
-            elif curr_c < shift4_c:
-                td_buy_setup += 1
-                td_sell_setup = 0
-            else:
-                td_buy_setup = 0
-                td_sell_setup = 0
-        
-        # 判定当前是否正好是 9 (或9的倍数，TD严格版通常只看9)
-        if td_buy_setup == 9:
-            signals.append("神奇九转: 底部买入信号 (9)")
-        elif td_sell_setup == 9:
-            signals.append("神奇九转: 顶部卖出信号 (9)")
-            
+        # 2. 检查迪玛克十三转 (Countdown 13)
+        col_cd = 'TD_SEQ_CD'
+        if col_cd in df.columns:
+            if prev[col_cd] < 13 and curr[col_cd] == 13:
+                if curr['CLOSE'] < curr['OPEN']: signals.append("迪玛克十三转: 终极底部 (13)")
+                else: signals.append("迪玛克十三转: 终极顶部 (13)")
+                
     except Exception as e:
-        print(f"TD Calc Error: {e}")
-    # ==============================================================
+        # 如果库没装好，只打印错误，不进行兜底计算
+        print(f"⚠️ TD Sequence Error: {e}")
+    # ==========================================================
 
+    # ------------------ 其他信号判定 ------------------
     # A. Nx
     is_break_blue = prev['CLOSE'] < prev['NX_BLUE_UP'] and curr['CLOSE'] > curr['NX_BLUE_UP']
     if curr['CLOSE'] > curr['NX_BLUE_UP'] and curr['CLOSE'] > curr['NX_YELL_UP']:
@@ -267,14 +274,14 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V5.3 手搓九转修复版Bot已启动: {bot.user}')
+    print(f'✅ V5.4 机构级Bot (Native Lib TD) 已启动: {bot.user}')
     print(f'⏰ 定时任务目标: 美东时间 16:01 (自动处理冬夏令时)')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V5.3)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V5.4)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
@@ -336,7 +343,7 @@ async def list_stocks(interaction: discord.Interaction):
     embed.set_footer(text="FMP Ultimate API • 机构级多因子模型")
     await interaction.response.send_message(embed=embed)
 
-# ================= 定时任务 =================
+# ================= 定时任务 (美东16:01) =================
 ny_tz = pytz.timezone('America/New_York')
 target_time = datetime.time(hour=16, minute=1, tzinfo=ny_tz)
 
@@ -346,6 +353,7 @@ async def daily_monitor():
     if not channel: return
     today = datetime.datetime.now().strftime('%Y-%m-%d')
     print(f"🔎 启动收盘扫描: {today} (美东 16:01)")
+    
     for user_id, stocks in watch_data.items():
         user_alerts = []
         for ticker, data in stocks.items():
@@ -355,7 +363,10 @@ async def daily_monitor():
                     should_alert = False
                     mode = data['mode']
                     if mode == 'always': should_alert = True
+                    # V5.0: 极值信号(Lv4)强制推，或每日首次推
+                    is_lv4 = any(get_signal_score(s) in [4, -4] for s in signals)
                     if mode == 'once_daily' and data.get('last_alert_date') != today: should_alert = True
+                    
                     if should_alert:
                         data['last_alert_date'] = today
                         score = calculate_total_score(signals)
@@ -366,6 +377,7 @@ async def daily_monitor():
                         embed.set_footer(text="FMP Ultimate API • 机构级多因子模型")
                         user_alerts.append(embed)
             except Exception as e: print(f"Error {ticker}: {e}")
+        
         if user_alerts:
             save_data()
             await channel.send(f"🔔 <@{user_id}> 您的 **{today}** 收盘日报已送达:")
