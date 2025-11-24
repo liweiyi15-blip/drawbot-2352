@@ -48,12 +48,15 @@ def save_data():
 # ================= 🧠 战法说明书 =================
 def get_signal_advice(t):
     advice = ""
-    # 0. 💎 估值/事件 (新增 PS)
-    if "财报" in t: advice = "高危事件: 锁定未来7天内财报，不确定性极大，建议空仓观察！"
+    # 0. 💎 估值/事件
+    if "财报" in t: advice = "高危事件: 锁定未来2周内财报，不确定性极大，建议回避！"
     elif "DCF 低估" in t: advice = "价值洼地: 价格低于未来现金流折现，具备长期安全边际。"
+    elif "DCF 高估" in t: advice = "价值透支: 价格远超内在价值，需警惕回归风险。"
     elif "PEG 低估" in t: advice = "成长价值: 业绩正增长且估值合理，优质GARP标的。"
     elif "PS 低估" in t: advice = "营收低估: 对于亏损成长股，当前市销率极具吸引力。"
     elif "PS 泡沫" in t: advice = "营收透支: 市销率过高，透支了未来多年的增长空间。"
+    elif "PE 低估" in t: advice = "相对低估: 传统市盈率处于低位。"
+    elif "PE 泡沫" in t: advice = "相对高估: 传统市盈率过高。"
     
     # 1. ⏳ 择时
     elif "九转" in t and "买入" in t: advice = "九转底部: 连跌9天，极度超跌，反弹一触即发。"
@@ -99,7 +102,10 @@ def get_signal_category_and_score(s):
     if "PEG" in s:
         if "低估" in s: return 'fundamental', 2
         if "高估" in s: return 'fundamental', -2
-    if "PS" in s: # 市销率
+    if "PS" in s: 
+        if "低估" in s: return 'fundamental', 2
+        if "泡沫" in s: return 'fundamental', -2
+    if "PE" in s:
         if "低估" in s: return 'fundamental', 2
         if "泡沫" in s: return 'fundamental', -2
 
@@ -173,7 +179,8 @@ def generate_report_content(signals):
             active_blocks.append(block)
         else:
             if score_val != 0:
-                inactive_lines.append(f"> 🔸 {item['raw']} ({score_str}) [已去重]")
+                # 🔸 替代灰色竖线
+                inactive_lines.append(f"🔸 {item['raw']} ({score_str}) [已去重]")
 
     final_text = "\n".join(active_blocks)
     if inactive_lines: final_text += "\n\n" + "\n".join(inactive_lines)
@@ -198,43 +205,38 @@ def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
-# V7.5: 亏损股 PS 估值 + 范围财报锁
+# V7.8: 基于真实数据样本的定向优化
 def get_valuation_and_earnings(ticker, current_price):
     if not FMP_API_KEY: return []
     sigs = []
+    
+    # 1. 📅 财报范围扫雷 (验证有效)
     try:
-        # 1. 📅 财报范围扫雷 (Calendar Range)
-        # 逻辑：直接查全市场未来7天的财报，看Ticker是否在里面
         today = datetime.date.today()
-        next_week = today + datetime.timedelta(days=7)
+        future_limit = today + datetime.timedelta(days=14) # 查未来2周
         today_str = today.strftime('%Y-%m-%d')
-        next_week_str = next_week.strftime('%Y-%m-%d')
+        future_str = future_limit.strftime('%Y-%m-%d')
         
-        # 使用范围接口，这是FMP最准的未来事件源
-        cal_url = f"https://financialmodelingprep.com/api/v3/earning_calendar?from={today_str}&to={next_week_str}&apikey={FMP_API_KEY}"
+        cal_url = f"https://financialmodelingprep.com/api/v3/earning_calendar?from={today_str}&to={future_str}&apikey={FMP_API_KEY}"
         cal_resp = requests.get(cal_url, timeout=5)
         
         if cal_resp.status_code == 200:
             cal_data = cal_resp.json()
-            # 在列表中寻找该股票
-            # 列表元素格式: {"date": "2025-11-25", "symbol": "NIO", ...}
             for entry in cal_data:
-                if entry.get('symbol') == ticker:
+                sym = entry.get('symbol', '')
+                # 精准匹配
+                if sym == ticker or sym == f"{ticker}.US":
                     date_str = entry.get('date')
                     if date_str:
                         e_date = parser.parse(date_str).date()
                         days_diff = (e_date - today).days
-                        sigs.append(f"⚠️ 财报预警 (T-{days_diff}天)")
-                        break # 找到最近的一个即可
+                        if 0 <= days_diff <= 14:
+                            sigs.append(f"⚠️ 财报预警 (T-{days_diff}天)")
+                            break
+    except: pass
 
-        # 2. 估值基础数据
-        quote_url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={FMP_API_KEY}"
-        quote_resp = requests.get(quote_url, timeout=5)
-        eps = 0
-        if quote_resp.status_code == 200:
-            q_data = quote_resp.json()
-            if q_data: eps = q_data[0].get('eps', 0)
-
+    # 2. 💎 估值分析 (Targeting Ratios-TTM)
+    try:
         # DCF
         dcf_url = f"https://financialmodelingprep.com/api/v3/discounted-cash-flow/{ticker}?apikey={FMP_API_KEY}"
         dcf_resp = requests.get(dcf_url, timeout=5)
@@ -243,35 +245,48 @@ def get_valuation_and_earnings(ticker, current_price):
             if d_data and 'dcf' in d_data[0]:
                 dcf = d_data[0]['dcf']
                 if dcf > 0:
-                    if current_price < dcf * 0.8: sigs.append(f"💎 DCF 低估 (估值:${dcf:.1f})")
-                    elif current_price > dcf * 1.5: sigs.append(f"💎 DCF 高估 (估值:${dcf:.1f})")
+                    if current_price < dcf * 0.85: sigs.append(f"💎 DCF 低估 (估值:${dcf:.1f})")
+                    elif current_price > dcf * 1.4: sigs.append(f"💎 DCF 高估 (估值:${dcf:.1f})")
 
-        # 3. PEG vs PS (智能切换)
+        # Ratios TTM (核心来源: PE, PEG, PS, EPS)
         ratios_url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={FMP_API_KEY}"
-        ratios_resp = requests.get(ratios_url, timeout=5)
-        if ratios_resp.status_code == 200:
-            r_data = ratios_resp.json()
+        r_resp = requests.get(ratios_url, timeout=5)
+        
+        if r_resp.status_code == 200:
+            r_data = r_resp.json()
             if r_data:
                 data = r_data[0]
                 
-                # 分支A: 盈利公司 -> 看 PEG
-                if eps > 0:
-                    peg = data.get('pegRatioTTM')
-                    if peg is not None:
-                        if 0 < peg < 1.0: sigs.append(f"💎 PEG 低估 ({peg:.2f})")
-                        elif peg > 2.0: sigs.append(f"💎 PEG 高估 ({peg:.2f})")
+                # 关键: 使用 ratios 里的 netIncomePerShareTTM 作为 EPS
+                # 因为 Quote 里的 EPS 是缺失的
+                eps_ttm = data.get('netIncomePerShareTTM', 0)
                 
-                # 分支B: 亏损公司 (NIO等) -> 看 PS (Price to Sales)
+                # 分支A: 盈利公司 (EPS > 0)
+                if eps_ttm > 0:
+                    # 优先看 PEG
+                    peg = data.get('priceToEarningsGrowthRatioTTM')
+                    if peg is not None:
+                        if 0 < peg < 1.2: sigs.append(f"💎 PEG 低估 ({peg:.2f})")
+                        elif peg > 2.5: sigs.append(f"💎 PEG 高估 ({peg:.2f})")
+                    
+                    # 其次看 PE
+                    pe = data.get('priceToEarningsRatioTTM')
+                    if pe is not None:
+                        if 0 < pe < 20: sigs.append(f"💎 PE 低估 ({pe:.1f}x)")
+                        # 只有在 PEG 没有发出信号时，才报 PE 泡沫，避免重复
+                        elif pe > 60 and "PEG" not in str(sigs): sigs.append(f"💎 PE 泡沫 ({pe:.1f}x)")
+
+                # 分支B: 亏损公司 (EPS <= 0)
                 else:
+                    # 必须看 PS
                     ps = data.get('priceToSalesRatioTTM')
                     if ps is not None:
-                        # PS 估值标准 (通常 PS<1.5 为低估, PS>10 为泡沫)
-                        # 对于蔚来这种车企，PS 1.0 左右是很舒服的位置
-                        if ps < 1.5: sigs.append(f"💎 PS 低估 ({ps:.2f}x)")
-                        elif ps > 10: sigs.append(f"💎 PS 泡沫 ({ps:.2f}x)")
+                        if ps < 2.0: sigs.append(f"💎 PS 低估 ({ps:.2f}x)")
+                        elif ps > 12: sigs.append(f"💎 PS 泡沫 ({ps:.2f}x)")
 
     except Exception as e:
-        print(f"Valuation Error {ticker}: {e}")
+        print(f"Valuation Logic Error {ticker}: {e}")
+        
     return sigs
 
 def get_daily_data_stable(ticker):
@@ -285,6 +300,7 @@ def get_daily_data_stable(ticker):
         df = pd.DataFrame(hist_data)
         df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
         df = df.iloc[::-1].reset_index(drop=True)
+        
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         quote_resp = requests.get(quote_url, timeout=5)
         quote_data = quote_resp.json()
@@ -337,7 +353,7 @@ def analyze_daily_signals(ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
 
-    # --- 0. 估值/财报分析 (V7.5) ---
+    # --- 0. 估值/财报分析 (V7.8) ---
     val_sigs = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
@@ -402,13 +418,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V7.5 亏损股特供版Bot已启动: {bot.user}')
+    print(f'✅ V7.8 真实数据适配版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V7.5)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V7.8)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
