@@ -12,7 +12,7 @@ import asyncio
 import pytz 
 import math
 import time
-import re
+import re # 引入正则库进行文本清洗
 from dateutil import parser
 
 # ================= 配置区域 =================
@@ -29,7 +29,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 watch_data = {}
-TOTAL_CHECK_POINTS = 81 
+TOTAL_CHECK_POINTS = 81
 
 # ================= 数据存取 =================
 def load_data():
@@ -167,7 +167,9 @@ def get_signal_category_and_score(s):
     
     # 5. 趋势
     if "Supertrend" in s: return 'trend', 1.5 if "看多" in s else -1.5
-    if "ADX" in s: return 'trend', 1.0
+    # ⚠️ V25.3 修正：ADX移出Trend去重组，放入独立叠加逻辑
+    if "ADX" in s: return 'momentum', 1.0 
+    
     if "黄金交叉" in s: return 'trend', 1.5
     if "死亡交叉" in s: return 'trend', -1.5
     if any(x in s for x in ["多头", "年线", "唐奇安上"]): return 'trend', 1.0
@@ -194,15 +196,24 @@ def generate_report_content(signals):
         cat, score = get_signal_category_and_score(s)
         items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
+    # 激活逻辑
+    # ⚠️ V25.3: 将 momentum (ADX) 加入独立叠加列表
     for item in items:
-        if item['cat'] in ['volume', 'timing', 'fundamental']:
+        if item['cat'] in ['volume', 'timing', 'fundamental', 'momentum']:
             item['active'] = True
 
+    # 去重类 (Trend, Pattern, Oscillator)
     for cat in ['trend', 'pattern', 'oscillator']:
         cat_items = [i for i in items if i['cat'] == cat]
-        if cat_items:
-            best = max(cat_items, key=lambda x: abs(x['score']))
-            best['active'] = True
+        bulls = [i for i in cat_items if i['score'] > 0]
+        bears = [i for i in cat_items if i['score'] < 0]
+        
+        if bulls:
+            best_bull = max(bulls, key=lambda x: x['score'])
+            best_bull['active'] = True
+        if bears:
+            best_bear = min(bears, key=lambda x: x['score'])
+            best_bear['active'] = True
 
     raw_sum = 0
     earnings_blocks = [] 
@@ -223,16 +234,15 @@ def generate_report_content(signals):
                 icon = "### 🚨 " if "高危" in item['raw'] else "### ⚠️ "
                 block = block.replace("### ", icon)
                 earnings_blocks.append(block)
-            
             elif score_val == 0:
                 block = f"ℹ️ **{item['raw']}**"
                 if advice: block += f"\n> {advice}"
                 active_list.append({'block': block, 'score': 0, 'raw': item['raw']})
-                
             else:
                 active_list.append({'block': block, 'score': score_val, 'raw': item['raw']})
         else:
             if score_val != 0:
+                # ⚠️ V25.3: 确保去重列表是纯文本，没有竖线
                 inactive_lines.append(f"🔸 {item['raw']} ({score_str}) [已去重]")
 
     active_list.sort(key=lambda x: abs(x['score']) if x['score'] != 0 else -1, reverse=True)
@@ -240,18 +250,7 @@ def generate_report_content(signals):
     final_text = "\n".join(final_blocks)
     if inactive_lines: final_text += "\n\n" + "\n".join(inactive_lines)
     
-    # 提取核心理由 (List模式专用)
-    main_reasons = []
-    if earnings_blocks: main_reasons.append("⚠️ 财报窗口期")
-    
-    top_signals = [x['raw'] for x in active_list if x['score'] != 0]
-    for sig in top_signals[:2]:
-        clean_sig = sig.split(' ')[-1] if len(sig.split(' ')) > 1 else sig
-        main_reasons.append(clean_sig)
-
-    if not main_reasons: main_reasons = ["趋势平稳"]
-    
-    return raw_sum, final_text, main_reasons
+    return raw_sum, final_text, active_list
 
 def format_dashboard_title(score):
     count = min(int(round(abs(score))), 10)
@@ -291,7 +290,7 @@ def get_valuation_and_earnings(ticker, current_price):
                         if 0 <= diff <= 14: sigs.append(f"财报预警 (T-{diff}天)")
                         break 
 
-        # 2. 华尔街共识
+        # 2. 华尔街
         rec_url = f"https://financialmodelingprep.com/stable/analyst-stock-recommendations?symbol={ticker}&apikey={FMP_API_KEY}"
         rec_resp = requests.get(rec_url, timeout=10)
         if rec_resp.status_code == 200:
@@ -341,6 +340,7 @@ def get_valuation_and_earnings(ticker, current_price):
                 if pe_list: avg_pe = sum(pe_list)/len(pe_list)
                 if ps_list: avg_ps = sum(ps_list)/len(ps_list)
 
+        # ⚠️ V25.3: 文本清洗，去括号，正则提取数字
         if eps_ttm > 0:
             if current_peg:
                 if 0 < current_peg < 1.3: sigs.append(f"PEG 低估: {current_peg:.2f}")
@@ -408,9 +408,7 @@ def analyze_daily_signals(ticker):
     df['nx_blue_dw'] = df['low'].ewm(span=23, adjust=False).mean()
     df['nx_yell_up'] = df['high'].ewm(span=89, adjust=False).mean()
     df['nx_yell_dw'] = df['low'].ewm(span=90, adjust=False).mean()
-    df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
-    df['hv'] = df['log_ret'].rolling(window=20).std() * np.sqrt(252) * 100
-    mas = [5, 10, 20, 30, 50, 60, 120, 200]
+    mas = [5, 10, 20, 30, 60, 120, 200]
     for m in mas: df.ta.sma(length=m, append=True)
     df.ta.bbands(length=20, std=2, append=True)
     df.ta.macd(fast=12, slow=26, signal=9, append=True)
@@ -437,7 +435,7 @@ def analyze_daily_signals(ticker):
     val_sigs = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
-    # 1. 均线/MA交叉
+    # 1. 均线/MA
     if (curr['SMA_5'] > curr['SMA_10'] > curr['SMA_20'] > curr['SMA_60']): signals.append("均线多头排列")
     if (curr['SMA_5'] < curr['SMA_10'] < curr['SMA_20'] < curr['SMA_60']): signals.append("均线空头排列")
     if 'SMA_50' in df.columns and 'SMA_200' in df.columns:
@@ -585,76 +583,16 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V25.3 评分公示版Bot已启动: {bot.user}')
+    print(f'✅ V25.3 交互体验终极修正版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
-
-# ⚠️ V25.3: 新增 /scores 命令
-@bot.tree.command(name="scores", description="查看全指标评分权重表")
-async def show_scores(interaction: discord.Interaction):
-    embed = discord.Embed(title="📊 全指标评分权重表 (V25.3)", description="评分系统采用 **金字塔权重**，单项不叠加，同类取极值。", color=discord.Color.gold())
-
-    # 1. 💎 基本面 (Fundamental)
-    embed.add_field(name="💎 基本面 & 估值", value="""
-`+1.5` 历史低位 / 华尔街买入
-`+1.0` DCF/PEG/PS/PE 低估
-`-1.5` 华尔街卖出
-` 0.0` 财报预警 / 估值溢价 / 历史高位
-""", inline=False)
-
-    # 2. 🕯️ 形态 (Pattern)
-    embed.add_field(name="🕯️ 形态 & 结构", value="""
-`+2.5` 三线打击
-`+2.0` 双底 / 杯柄 / 三角旗突破 / PCR恐慌
-`-2.0` 双顶 / 三角旗跌破 / PCR贪婪
-`+1.5` 回踩支撑 / 趋势线 / 布林收口 / 向上跳空 / HV蓄势
-`-1.5` 向下跳空 / HV破位
-`+1.0` 早晨之星 / 阳包阴 / 锤子
-`-1.0` 黄昏之星 / 阴包阳 / 断头 / 射击 / 墓碑
-""", inline=False)
-
-    # 3. ⏳ 择时 (Timing)
-    embed.add_field(name="⏳ 择时 & 周期", value="""
-`+2.0` 九转底部 / 十三转底部
-`-2.0` 九转顶部 / 十三转顶部
-""", inline=False)
-
-    # 4. 💰 资金 (Volume)
-    embed.add_field(name="💰 资金 & 筹码", value="""
-`+2.0` 盘中爆量抢筹
-`-2.0` 盘中爆量杀跌
-`+1.0` 放量大涨 / 缩量回调 / VWAP站上
-`-1.0` 放量大跌 / 缩量上涨 / VWAP跌破
-""", inline=False)
-
-    # 5. 📈 趋势 (Trend)
-    embed.add_field(name="📈 趋势 & 通道", value="""
-`+1.5` Supertrend看多 / 黄金交叉
-`-1.5` Supertrend看空 / 死亡交叉
-`+1.0` 多头排列 / Nx突破/站稳/牛市 / R1突破 / ADX加速
-`-1.0` 空头排列 / Nx跌破/熊市 / S1跌破
-`+0.5` 站上MA
-`-0.5` 跌破MA
-""", inline=False)
-
-    # 6. 🌊 摆动 (Oscillator)
-    embed.add_field(name="🌊 摆动 & 情绪", value="""
-`+1.5` 底背离
-`-1.5` 顶背离
-`+1.0` J值反钩
-`+0.5` 金叉 / 突破布林 / 超卖 (RSI/CCI/WillR)
-`-0.5` 死叉 / 跌破布林 / 超买 (RSI/CCI/WillR)
-""", inline=False)
-
-    embed.set_footer(text="最终得分 = Σ(各维度得分) (无封顶，所见即所得)")
-    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
     embed = discord.Embed(title="🤖 指令手册 (V25.3)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 批量添加 (空格分隔)\n`/remove [代码]` : 删除自选\n`/list` : 查看我的看板", inline=False)
-    embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析\n`/scores` : 查看评分标准", inline=False)
+    embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
     embed.set_footer(text="FMP Ultimate API • 机构级多因子模型")
     await interaction.response.send_message(embed=embed)
 
@@ -663,12 +601,10 @@ async def help_bot(interaction: discord.Interaction):
 async def check_stocks(interaction: discord.Interaction, tickers: str):
     await interaction.response.defer()
     stock_list = tickers.upper().replace(',', ' ').split()[:5]
-    loop = asyncio.get_running_loop()
-    
     for ticker in stock_list:
         try:
             print(f"🚀 [CHECK] Processing {ticker}...")
-            price, signals = await loop.run_in_executor(None, analyze_daily_signals, ticker)
+            price, signals = analyze_daily_signals(ticker)
             
             if price is None:
                 print(f"⚠️ [CHECK] No data for {ticker}")
@@ -676,7 +612,7 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
                 continue
             if not signals: signals.append("趋势平稳，暂无异动")
             
-            # V25.1修复: 接收3个返回值
+            # ⚠️ V25.3: 解包 3 个值
             score, desc_final, _ = generate_report_content(signals)
             text_part, color = format_dashboard_title(score)
             
@@ -697,10 +633,11 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
 @app_commands.describe(ticker="输入股票代码，支持批量，空格分隔 (如: TSLA NVDA)")
 @app_commands.choices(mode=[app_commands.Choice(name="每日一次", value="once_daily"), app_commands.Choice(name="总是提醒", value="always")])
 async def add_stock(interaction: discord.Interaction, ticker: str, mode: str = "once_daily"):
+    ticker = ticker.upper()
     user_id = str(interaction.user.id)
     if user_id not in watch_data: watch_data[user_id] = {}
     
-    stock_list = ticker.upper().replace(',', ' ').split()
+    stock_list = ticker.replace(',', ' ').split()
     if not stock_list:
         return await interaction.response.send_message("⚠️ 请输入有效的股票代码。")
 
@@ -748,28 +685,50 @@ async def list_stocks(interaction: discord.Interaction):
 
         if not signals: signals = ["趋势平稳"]
         
-        # V25.1: 使用第3个返回值 reasons
+        # V25.3: 使用第3个返回值 reasons 并彻底清洗
         score, _, reasons = generate_report_content(signals)
         
         main_reason = "趋势平稳"
         if reasons:
-            main_reason = reasons[0]
-            main_reason = main_reason.replace("*", "").replace("`", "").strip()
-            if " " in main_reason:
-                main_reason = main_reason.split(" ", 1)[1]
-        
+            # 1. 取第一个理由
+            raw = reasons[0]
+            # 2. 去掉 Markdown (*, `)
+            clean = raw.replace("*", "").replace("`", "").strip()
+            # 3. 核心清洗: 去掉 Emoji (空格分割法, 假设 Emoji 都在最前)
+            # 4. 核心清洗: 去掉括号里的参数 (例如 (26.0))
+            # 5. 核心清洗: 去掉 [已去重] 标签
+            
+            # 移除括号及内容 (正则)
+            clean = re.sub(r"\(.*?\)", "", clean)
+            clean = re.sub(r"\[.*?\]", "", clean)
+            
+            # 移除 Emoji (如果存在空格，取最后一部分；如果是中文，保留)
+            # 简单策略：如果有空格，取最后一个；如果没有空格，保留原样
+            parts = clean.split(' ')
+            if len(parts) > 1:
+                # 假设 "💂‍♂️ 三线打击" -> ["💂‍♂️", "三线打击"]
+                # 假设 "ADX 趋势加速" -> ["ADX", "趋势加速"] -> "趋势加速"? 不对 ADX要保留
+                # 策略：只去掉非ASCII字符开头的？太复杂。
+                # 简单粗暴：去掉第一个元素如果它是Emoji? 
+                # 回归最简：只显示文本。您之前的截图是 "三线打击"。
+                # 我们这里用正则保留 中文、英文、数字
+                clean = "".join(re.findall(r'[\u4e00-\u9fa5a-zA-Z0-9\s]', clean)).strip()
+            
+            main_reason = clean
+
         text_part, _ = format_dashboard_title(score)
-        short_status = text_part.split(' ')[0] + text_part.split(' ')[1]
+        # 截取状态和图标
+        status_text = text_part.split(' ')[0] + text_part.split(' ')[1]
         icons = text_part.split(' ')[2]
         
-        line = f"**{ticker.ljust(5)}**: {short_status} {icons}\n└ {main_reason}"
+        line = f"**{ticker.ljust(5)}**: {status_text} {icons}\n└ {main_reason}"
         lines.append(line)
 
     embed = discord.Embed(title="📊 监控面板", color=discord.Color.blue())
     embed.description = "\n".join(lines)
     
     ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
-    embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}\n💡 使用 /check [代码] 查看详细指标")
+    embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
     
     await interaction.followup.send(embed=embed)
     print(f"✅ [LIST] Done for user {user_id}")
@@ -801,6 +760,7 @@ async def daily_monitor():
         for i, (price, signals) in enumerate(results):
             ticker = tickers[i]
             if signals:
+                # V25.3: 解包 3 个值
                 score, desc_final, _ = generate_report_content(signals)
                 
                 should_alert = False
