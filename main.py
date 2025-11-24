@@ -135,6 +135,7 @@ def generate_report_content(signals):
             active_blocks.append(block)
         else:
             if score_val != 0:
+                # 去掉 > 符号，直接用 🔸
                 inactive_lines.append(f"🔸 {item['raw']} ({score_str}) [已去重]")
 
     final_text = "\n".join(active_blocks)
@@ -159,16 +160,13 @@ def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
-# V8.2: 强力穿透版 (Headers + Status Debug)
+# V8.3: 移除所有 Headers，回归原始调用
 def get_valuation_and_earnings(ticker, current_price):
     if not FMP_API_KEY: return [], "Key Missing"
     sigs = []
     debug_log = {} 
     
-    # 伪装成 Chrome 浏览器
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    # ❌ 移除 Headers，防止被 FMP 防火墙拦截
     
     try:
         # 1. 📅 财报日历 (Range)
@@ -177,18 +175,17 @@ def get_valuation_and_earnings(ticker, current_price):
         today_str = today.strftime('%Y-%m-%d')
         
         cal_url = f"https://financialmodelingprep.com/api/v3/earning_calendar?from={today_str}&to={future_str}&apikey={FMP_API_KEY}"
-        cal_resp = requests.get(cal_url, headers=headers, timeout=10)
+        cal_resp = requests.get(cal_url, timeout=10)
         
         debug_log['Cal_Stat'] = cal_resp.status_code
         
         if cal_resp.status_code == 200:
             cal_data = cal_resp.json()
-            debug_log['Cal_Len'] = len(cal_data) # 看看有没有返回数据
             
             for entry in cal_data:
                 sym = entry.get('symbol', '')
-                # 宽松匹配：只要 Ticker 在 Symbol 里就算 (例如 NIO 匹配 NIO)
-                if ticker in sym:
+                # 只要 Symbol 包含 ticker 字符串 (NIO in NIO)
+                if ticker == sym or sym == f"{ticker}.US":
                     d_str = entry.get('date')
                     if d_str:
                         e_date = parser.parse(d_str).date()
@@ -200,7 +197,7 @@ def get_valuation_and_earnings(ticker, current_price):
 
         # 2. 💎 估值 (Ratios TTM)
         r_url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={FMP_API_KEY}"
-        r_resp = requests.get(r_url, headers=headers, timeout=10)
+        r_resp = requests.get(r_url, timeout=10)
         
         debug_log['Rat_Stat'] = r_resp.status_code
         
@@ -232,7 +229,7 @@ def get_valuation_and_earnings(ticker, current_price):
 
         # 3. DCF
         d_url = f"https://financialmodelingprep.com/api/v3/discounted-cash-flow/{ticker}?apikey={FMP_API_KEY}"
-        d_resp = requests.get(d_url, headers=headers, timeout=10)
+        d_resp = requests.get(d_url, timeout=10)
         
         debug_log['DCF_Stat'] = d_resp.status_code
         
@@ -253,11 +250,9 @@ def get_valuation_and_earnings(ticker, current_price):
 
 def get_daily_data_stable(ticker):
     if not FMP_API_KEY: return None
-    # 给所有请求加 Headers
-    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         hist_url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={ticker}&apikey={FMP_API_KEY}"
-        hist_resp = requests.get(hist_url, headers=headers, timeout=10)
+        hist_resp = requests.get(hist_url, timeout=10)
         if hist_resp.status_code != 200: return None
         hist_data = hist_resp.json()
         if not hist_data: return None
@@ -266,7 +261,7 @@ def get_daily_data_stable(ticker):
         df = df.iloc[::-1].reset_index(drop=True)
         
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
-        quote_resp = requests.get(quote_url, headers=headers, timeout=5)
+        quote_resp = requests.get(quote_url, timeout=5)
         quote_data = quote_resp.json()
         if not quote_data: return None
         curr = quote_data[0]
@@ -316,7 +311,7 @@ def analyze_daily_signals(ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
 
-    # --- 0. 估值/财报 (V8.2) ---
+    # --- 0. 估值/财报 (V8.3) ---
     val_sigs, debug_info = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
@@ -373,13 +368,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V8.2 强力穿透版Bot已启动: {bot.user}')
+    print(f'✅ V8.3 祛魅归真版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V8.2)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V8.3)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
@@ -403,7 +398,6 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
         embed = discord.Embed(title=f"{ticker} : {text_part}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
         embed.set_image(url=get_finviz_chart_url(ticker))
         
-        # 🔴 显式调试信息：API状态码 + 关键数据
         ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
         footer_text = f"FMP Ultimate API • [DEBUG] {debug_info}"
         if len(footer_text) > 2000: footer_text = footer_text[:2000]
