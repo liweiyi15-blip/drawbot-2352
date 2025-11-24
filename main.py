@@ -28,7 +28,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 watch_data = {}
-TOTAL_CHECK_POINTS = 81 
+TOTAL_CHECK_POINTS = 81
 
 # ================= 数据存取 =================
 def load_data():
@@ -124,7 +124,7 @@ def get_signal_advice(t):
     
     return advice
 
-# ================= ⚖️ 评分系统 (V25.0) =================
+# ================= ⚖️ 评分系统 =================
 def get_signal_category_and_score(s):
     s = s.strip()
     
@@ -184,25 +184,33 @@ def get_signal_category_and_score(s):
     
     return 'other', 0
 
-def calculate_score(raw_score):
-    return raw_score
-
 def generate_report_content(signals):
+    """
+    V25.1 修复: 明确返回 3 个值，解决 list 解包报错
+    Returns: (final_score, final_text, main_reasons)
+    """
     items = []
     for s in signals:
         cat, score = get_signal_category_and_score(s)
         items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
+    # 激活逻辑
     for item in items:
         if item['cat'] in ['volume', 'timing', 'fundamental']:
             item['active'] = True
 
-    # 去重逻辑：同类取最大绝对值
+    # 去重逻辑 (取极值)
     for cat in ['trend', 'pattern', 'oscillator']:
         cat_items = [i for i in items if i['cat'] == cat]
-        if cat_items:
-            best = max(cat_items, key=lambda x: abs(x['score']))
-            best['active'] = True
+        bulls = [i for i in cat_items if i['score'] > 0]
+        bears = [i for i in cat_items if i['score'] < 0]
+        
+        if bulls:
+            best_bull = max(bulls, key=lambda x: x['score'])
+            best_bull['active'] = True
+        if bears:
+            best_bear = min(bears, key=lambda x: x['score'])
+            best_bear['active'] = True
 
     raw_sum = 0
     earnings_blocks = [] 
@@ -227,34 +235,46 @@ def generate_report_content(signals):
             elif score_val == 0:
                 block = f"ℹ️ **{item['raw']}**"
                 if advice: block += f"\n> {advice}"
-                active_list.append({'block': block, 'score': 0})
+                active_list.append({'block': block, 'score': 0, 'raw': item['raw']})
                 
             else:
-                # 这里是为了 list 模式提取“主理由”用的
-                active_list.append({'block': block, 'score': score_val, 'raw_text': item['raw']})
+                active_list.append({'block': block, 'score': score_val, 'raw': item['raw']})
         else:
             if score_val != 0:
                 inactive_lines.append(f"🔸 {item['raw']} ({score_str}) [已去重]")
 
+    # 排序
     active_list.sort(key=lambda x: abs(x['score']) if x['score'] != 0 else -1, reverse=True)
+    
     final_blocks = earnings_blocks + [x['block'] for x in active_list]
     final_text = "\n".join(final_blocks)
     if inactive_lines: final_text += "\n\n" + "\n".join(inactive_lines)
     
-    # 返回：总分, 完整文本, 主理由列表(用于List模式)
-    main_reasons = [x['raw_text'] for x in active_list if x['score'] != 0]
+    # 提取核心理由 (用于 List 模式)
+    main_reasons = []
+    if earnings_blocks:
+        main_reasons.append("⚠️ 财报高危")
+    
+    # 取分数最高的1-2个理由
+    top_signals = [x['raw'] for x in active_list if x['score'] != 0]
+    if top_signals:
+        main_reasons.extend(top_signals[:2])
+    
+    if not main_reasons:
+        main_reasons = ["趋势平稳"]
+
     return raw_sum, final_text, main_reasons
 
 def format_dashboard_title(score):
     count = min(int(round(abs(score))), 10)
     icons = "⭐" * count if score > 0 else "💀" * count if score < 0 else "⚖️"
     status, color = "震荡", discord.Color.light_grey()
-    if score >= 8.0: status, color = "史诗暴涨", discord.Color.from_rgb(255, 0, 0)
-    elif score >= 5.0: status, color = "极度强势", discord.Color.red()
-    elif score >= 2.0: status, color = "趋势看多", discord.Color.orange()
-    elif score <= -8.0: status, color = "史诗崩盘", discord.Color.from_rgb(0, 255, 0)
-    elif score <= -5.0: status, color = "极度高危", discord.Color.green()
-    elif score <= -2.0: status, color = "趋势看空", discord.Color.dark_teal()
+    if score >= 12.0: status, color = "史诗暴涨", discord.Color.from_rgb(255, 0, 0)
+    elif score >= 8.0: status, color = "极度强势", discord.Color.red()
+    elif score >= 3.0: status, color = "趋势看多", discord.Color.orange()
+    elif score <= -12.0: status, color = "史诗崩盘", discord.Color.from_rgb(0, 255, 0)
+    elif score <= -8.0: status, color = "极度高危", discord.Color.green()
+    elif score <= -3.0: status, color = "趋势看空", discord.Color.dark_teal()
     else: status, color = "震荡整理", discord.Color.gold()
     return f"{status} ({score:+.1f}) {icons}", color
 
@@ -423,7 +443,7 @@ def analyze_daily_signals(ticker):
     val_sigs = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
-    # 1. 均线/MA
+    # 1. 均线
     if (curr['SMA_5'] > curr['SMA_10'] > curr['SMA_20'] > curr['SMA_60']): signals.append("均线多头排列")
     if (curr['SMA_5'] < curr['SMA_10'] < curr['SMA_20'] < curr['SMA_60']): signals.append("均线空头排列")
     if 'SMA_50' in df.columns and 'SMA_200' in df.columns:
@@ -441,7 +461,7 @@ def analyze_daily_signals(ticker):
                 name = "年线" if m == 200 else f"MA{m}"
                 signals.append(f"跌破 {name} ({curr[c]:.2f})")
 
-    # 2. 波动/资金
+    # 2. 波动
     if 'HV' in df.columns:
         curr_hv = curr['HV']
         if curr_hv < 20:
@@ -571,13 +591,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V25.0 完美清单版Bot已启动: {bot.user}')
+    print(f'✅ V25.1 修复Crash版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V25.0)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V25.1)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 批量添加 (空格分隔)\n`/remove [代码]` : 删除自选\n`/list` : 查看我的看板", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
@@ -589,10 +609,13 @@ async def help_bot(interaction: discord.Interaction):
 async def check_stocks(interaction: discord.Interaction, tickers: str):
     await interaction.response.defer()
     stock_list = tickers.upper().replace(',', ' ').split()[:5]
+    loop = asyncio.get_running_loop()
+    
     for ticker in stock_list:
         try:
             print(f"🚀 [CHECK] Processing {ticker}...")
-            price, signals = analyze_daily_signals(ticker)
+            # ⚠️ 这里的解包必须与 analyze_daily_signals 返回值匹配 (2个)
+            price, signals = await loop.run_in_executor(None, analyze_daily_signals, ticker)
             
             if price is None:
                 print(f"⚠️ [CHECK] No data for {ticker}")
@@ -600,7 +623,8 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
                 continue
             if not signals: signals.append("趋势平稳，暂无异动")
             
-            score, desc_final = generate_report_content(signals)
+            # ⚠️ 这里的解包必须与 generate_report_content 返回值匹配 (3个)
+            score, desc_final, _ = generate_report_content(signals)
             text_part, color = format_dashboard_title(score)
             
             embed = discord.Embed(title=f"{ticker} : {text_part}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
@@ -662,41 +686,31 @@ async def list_stocks(interaction: discord.Interaction):
     
     results = await asyncio.gather(*tasks_list)
     
-    # ⚠️ V25.0: 生成单张 Embed 清单
     lines = []
     for i, (price, signals) in enumerate(results):
         ticker = tickers[i]
         if price is None:
             lines.append(f"`{i+1:02d}.` **{ticker.ljust(5)}**: ❌ 暂无数据")
             continue
-            
+
         if not signals: signals = ["趋势平稳"]
         
-        # 1. 计算分数和内容
-        score, desc_final = generate_report_content(signals)
-        # 2. 提取核心理由 (取 generate_report_content 返回的第三个参数：主理由列表)
-        # 为了简化代码，我们这里稍微重构一下 generate_report_content 让它返回更多信息
-        # 或者直接在这里简单提取：
-        # 找到 signals 里分数绝对值最大的一个
-        # 重新调用一次简单的分类函数
-        items = []
-        for s in signals:
-             cat, sc = get_signal_category_and_score(s)
-             items.append((s, sc))
+        # ⚠️ 使用第3个返回值: reasons
+        score, _, reasons = generate_report_content(signals)
         
-        # 找分数绝对值最大的作为 Key Reason
-        key_reason = "趋势平稳"
-        if items:
-            best_item = max(items, key=lambda x: abs(x[1]))
-            key_reason = best_item[0]
+        # 提取主理由
+        main_reason = "趋势平稳"
+        if reasons:
+            main_reason = reasons[0]
+            # 简单清洗一下文本，去掉可能存在的 Markdown 符号
+            main_reason = main_reason.replace("*", "").replace("`", "")
             
         text_part, _ = format_dashboard_title(score)
-        # 格式: `01.` **NVDA** ($145): 极度强势 (+6) ⭐... | Nx 牛市排列
-        short_status = text_part.split(' ')[0] + text_part.split(' ')[1] # "极度强势(+6)"
-        icons = text_part.split(' ')[2] # "⭐⭐⭐"
+        # 格式: 01. TSLA ($391): 史诗暴涨 (+9.5) ⭐... | Nx 牛市排列
+        short_status = text_part.split(' ')[0] + text_part.split(' ')[1]
+        icons = text_part.split(' ')[2]
         
-        # 组合
-        line = f"`{i+1:02d}.` **{ticker.ljust(5)}** (`${price:.1f}`): {short_status} {icons} | {key_reason}"
+        line = f"`{i+1:02d}.` **{ticker.ljust(5)}** (`${price:.1f}`): {short_status} {icons} | {main_reason}"
         lines.append(line)
 
     embed = discord.Embed(title=f"📊 {interaction.user.name} 的实时行情墙", color=discord.Color.blue())
@@ -735,7 +749,8 @@ async def daily_monitor():
         for i, (price, signals) in enumerate(results):
             ticker = tickers[i]
             if signals:
-                score, desc_final = generate_report_content(signals)
+                # ⚠️ 这里的解包必须匹配
+                score, desc_final, _ = generate_report_content(signals)
                 
                 should_alert = False
                 mode = stocks[ticker]['mode']
