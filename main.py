@@ -12,6 +12,7 @@ import asyncio
 import pytz 
 import math
 import time
+import re
 from dateutil import parser
 
 # ================= 配置区域 =================
@@ -28,7 +29,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 watch_data = {}
-TOTAL_CHECK_POINTS = 81
+TOTAL_CHECK_POINTS = 81 
 
 # ================= 数据存取 =================
 def load_data():
@@ -145,7 +146,7 @@ def get_signal_category_and_score(s):
         if "恐慌" in s: return 'pattern', 1.5
         if "高潮" in s: return 'pattern', -1.5
 
-    # 2. 形态
+    # 2. 形态 (Pattern)
     if "三线打击" in s: return 'pattern', 2.5
     if any(x in s for x in ["双底", "杯柄", "三角旗突破"]): return 'pattern', 2.0
     if any(x in s for x in ["双顶", "三角旗跌破"]): return 'pattern', -2.0
@@ -184,33 +185,24 @@ def get_signal_category_and_score(s):
     
     return 'other', 0
 
+def calculate_linear_score(raw_score):
+    return raw_score
+
 def generate_report_content(signals):
-    """
-    V25.1 修复: 明确返回 3 个值，解决 list 解包报错
-    Returns: (final_score, final_text, main_reasons)
-    """
     items = []
     for s in signals:
         cat, score = get_signal_category_and_score(s)
         items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
-    # 激活逻辑
     for item in items:
         if item['cat'] in ['volume', 'timing', 'fundamental']:
             item['active'] = True
 
-    # 去重逻辑 (取极值)
     for cat in ['trend', 'pattern', 'oscillator']:
         cat_items = [i for i in items if i['cat'] == cat]
-        bulls = [i for i in cat_items if i['score'] > 0]
-        bears = [i for i in cat_items if i['score'] < 0]
-        
-        if bulls:
-            best_bull = max(bulls, key=lambda x: x['score'])
-            best_bull['active'] = True
-        if bears:
-            best_bear = min(bears, key=lambda x: x['score'])
-            best_bear['active'] = True
+        if cat_items:
+            best = max(cat_items, key=lambda x: abs(x['score']))
+            best['active'] = True
 
     raw_sum = 0
     earnings_blocks = [] 
@@ -243,38 +235,34 @@ def generate_report_content(signals):
             if score_val != 0:
                 inactive_lines.append(f"🔸 {item['raw']} ({score_str}) [已去重]")
 
-    # 排序
     active_list.sort(key=lambda x: abs(x['score']) if x['score'] != 0 else -1, reverse=True)
-    
     final_blocks = earnings_blocks + [x['block'] for x in active_list]
     final_text = "\n".join(final_blocks)
     if inactive_lines: final_text += "\n\n" + "\n".join(inactive_lines)
     
-    # 提取核心理由 (用于 List 模式)
+    # 提取核心理由 (List模式专用)
     main_reasons = []
-    if earnings_blocks:
-        main_reasons.append("⚠️ 财报高危")
+    if earnings_blocks: main_reasons.append("⚠️ 财报窗口期")
     
-    # 取分数最高的1-2个理由
     top_signals = [x['raw'] for x in active_list if x['score'] != 0]
-    if top_signals:
-        main_reasons.extend(top_signals[:2])
-    
-    if not main_reasons:
-        main_reasons = ["趋势平稳"]
+    for sig in top_signals[:2]:
+        clean_sig = sig.split(' ')[-1] if len(sig.split(' ')) > 1 else sig
+        main_reasons.append(clean_sig)
 
+    if not main_reasons: main_reasons = ["趋势平稳"]
+    
     return raw_sum, final_text, main_reasons
 
 def format_dashboard_title(score):
     count = min(int(round(abs(score))), 10)
     icons = "⭐" * count if score > 0 else "💀" * count if score < 0 else "⚖️"
     status, color = "震荡", discord.Color.light_grey()
-    if score >= 12.0: status, color = "史诗暴涨", discord.Color.from_rgb(255, 0, 0)
-    elif score >= 8.0: status, color = "极度强势", discord.Color.red()
-    elif score >= 3.0: status, color = "趋势看多", discord.Color.orange()
-    elif score <= -12.0: status, color = "史诗崩盘", discord.Color.from_rgb(0, 255, 0)
-    elif score <= -8.0: status, color = "极度高危", discord.Color.green()
-    elif score <= -3.0: status, color = "趋势看空", discord.Color.dark_teal()
+    if score >= 8.0: status, color = "史诗暴涨", discord.Color.from_rgb(255, 0, 0)
+    elif score >= 5.0: status, color = "极度强势", discord.Color.red()
+    elif score >= 2.0: status, color = "趋势看多", discord.Color.orange()
+    elif score <= -8.0: status, color = "史诗崩盘", discord.Color.from_rgb(0, 255, 0)
+    elif score <= -5.0: status, color = "极度高危", discord.Color.green()
+    elif score <= -2.0: status, color = "趋势看空", discord.Color.dark_teal()
     else: status, color = "震荡整理", discord.Color.gold()
     return f"{status} ({score:+.1f}) {icons}", color
 
@@ -287,6 +275,7 @@ def get_valuation_and_earnings(ticker, current_price):
     if not FMP_API_KEY: return []
     sigs = []
     try:
+        # 1. 财报
         today = datetime.date.today()
         future_str = (today + datetime.timedelta(days=14)).strftime('%Y-%m-%d')
         today_str = today.strftime('%Y-%m-%d')
@@ -302,6 +291,7 @@ def get_valuation_and_earnings(ticker, current_price):
                         if 0 <= diff <= 14: sigs.append(f"财报预警 (T-{diff}天)")
                         break 
 
+        # 2. 华尔街共识
         rec_url = f"https://financialmodelingprep.com/stable/analyst-stock-recommendations?symbol={ticker}&apikey={FMP_API_KEY}"
         rec_resp = requests.get(rec_url, timeout=10)
         if rec_resp.status_code == 200:
@@ -315,6 +305,7 @@ def get_valuation_and_earnings(ticker, current_price):
                     if buy/total > 0.7: sigs.append("🏦 华尔街共识: 强力买入")
                     elif sell/total > 0.5: sigs.append("🏦 华尔街共识: 卖出")
 
+        # 3. PCR
         pcr_url = f"https://financialmodelingprep.com/stable/stock/put-call-ratio?symbol={ticker}&apikey={FMP_API_KEY}"
         pcr_resp = requests.get(pcr_url, timeout=5)
         if pcr_resp.status_code == 200:
@@ -325,6 +316,7 @@ def get_valuation_and_earnings(ticker, current_price):
                     if pcr_val > 1.5: sigs.append(f"PCR 恐慌极值: {pcr_val:.2f}")
                     elif pcr_val < 0.5: sigs.append(f"PCR 贪婪极值: {pcr_val:.2f}")
 
+        # 4. 估值
         r_url = f"https://financialmodelingprep.com/stable/ratios-ttm?symbol={ticker}&apikey={FMP_API_KEY}"
         r_resp = requests.get(r_url, timeout=10)
         current_pe=None; current_ps=None; current_peg=None; eps_ttm=0
@@ -337,6 +329,7 @@ def get_valuation_and_earnings(ticker, current_price):
                 current_peg = rd.get('priceToEarningsGrowthRatioTTM')
                 eps_ttm = rd.get('netIncomePerShareTTM', 0)
 
+        # 5. 历史估值
         h_url = f"https://financialmodelingprep.com/stable/ratios?symbol={ticker}&limit=3&apikey={FMP_API_KEY}"
         h_resp = requests.get(h_url, timeout=10)
         avg_pe=0; avg_ps=0
@@ -360,6 +353,7 @@ def get_valuation_and_earnings(ticker, current_price):
                 if current_ps < avg_ps * 0.8: sigs.append(f"PS 历史低位: {current_ps:.2f} [均值 {avg_ps:.2f}]")
                 elif current_ps > avg_ps * 1.3: sigs.append(f"PS 历史高位: {current_ps:.2f} [均值 {avg_ps:.2f}]")
 
+        # 6. DCF
         d_url = f"https://financialmodelingprep.com/stable/discounted-cash-flow?symbol={ticker}&apikey={FMP_API_KEY}"
         d_resp = requests.get(d_url, timeout=10)
         if d_resp.status_code == 200:
@@ -443,7 +437,7 @@ def analyze_daily_signals(ticker):
     val_sigs = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
-    # 1. 均线
+    # 1. 均线/MA交叉
     if (curr['SMA_5'] > curr['SMA_10'] > curr['SMA_20'] > curr['SMA_60']): signals.append("均线多头排列")
     if (curr['SMA_5'] < curr['SMA_10'] < curr['SMA_20'] < curr['SMA_60']): signals.append("均线空头排列")
     if 'SMA_50' in df.columns and 'SMA_200' in df.columns:
@@ -461,7 +455,7 @@ def analyze_daily_signals(ticker):
                 name = "年线" if m == 200 else f"MA{m}"
                 signals.append(f"跌破 {name} ({curr[c]:.2f})")
 
-    # 2. 波动
+    # 2. 波动/资金
     if 'HV' in df.columns:
         curr_hv = curr['HV']
         if curr_hv < 20:
@@ -591,16 +585,76 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V25.1 修复Crash版Bot已启动: {bot.user}')
+    print(f'✅ V25.3 评分公示版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
+# ⚠️ V25.3: 新增 /scores 命令
+@bot.tree.command(name="scores", description="查看全指标评分权重表")
+async def show_scores(interaction: discord.Interaction):
+    embed = discord.Embed(title="📊 全指标评分权重表 (V25.3)", description="评分系统采用 **金字塔权重**，单项不叠加，同类取极值。", color=discord.Color.gold())
+
+    # 1. 💎 基本面 (Fundamental)
+    embed.add_field(name="💎 基本面 & 估值", value="""
+`+1.5` 历史低位 / 华尔街买入
+`+1.0` DCF/PEG/PS/PE 低估
+`-1.5` 华尔街卖出
+` 0.0` 财报预警 / 估值溢价 / 历史高位
+""", inline=False)
+
+    # 2. 🕯️ 形态 (Pattern)
+    embed.add_field(name="🕯️ 形态 & 结构", value="""
+`+2.5` 三线打击
+`+2.0` 双底 / 杯柄 / 三角旗突破 / PCR恐慌
+`-2.0` 双顶 / 三角旗跌破 / PCR贪婪
+`+1.5` 回踩支撑 / 趋势线 / 布林收口 / 向上跳空 / HV蓄势
+`-1.5` 向下跳空 / HV破位
+`+1.0` 早晨之星 / 阳包阴 / 锤子
+`-1.0` 黄昏之星 / 阴包阳 / 断头 / 射击 / 墓碑
+""", inline=False)
+
+    # 3. ⏳ 择时 (Timing)
+    embed.add_field(name="⏳ 择时 & 周期", value="""
+`+2.0` 九转底部 / 十三转底部
+`-2.0` 九转顶部 / 十三转顶部
+""", inline=False)
+
+    # 4. 💰 资金 (Volume)
+    embed.add_field(name="💰 资金 & 筹码", value="""
+`+2.0` 盘中爆量抢筹
+`-2.0` 盘中爆量杀跌
+`+1.0` 放量大涨 / 缩量回调 / VWAP站上
+`-1.0` 放量大跌 / 缩量上涨 / VWAP跌破
+""", inline=False)
+
+    # 5. 📈 趋势 (Trend)
+    embed.add_field(name="📈 趋势 & 通道", value="""
+`+1.5` Supertrend看多 / 黄金交叉
+`-1.5` Supertrend看空 / 死亡交叉
+`+1.0` 多头排列 / Nx突破/站稳/牛市 / R1突破 / ADX加速
+`-1.0` 空头排列 / Nx跌破/熊市 / S1跌破
+`+0.5` 站上MA
+`-0.5` 跌破MA
+""", inline=False)
+
+    # 6. 🌊 摆动 (Oscillator)
+    embed.add_field(name="🌊 摆动 & 情绪", value="""
+`+1.5` 底背离
+`-1.5` 顶背离
+`+1.0` J值反钩
+`+0.5` 金叉 / 突破布林 / 超卖 (RSI/CCI/WillR)
+`-0.5` 死叉 / 跌破布林 / 超买 (RSI/CCI/WillR)
+""", inline=False)
+
+    embed.set_footer(text="最终得分 = Σ(各维度得分) (无封顶，所见即所得)")
+    await interaction.response.send_message(embed=embed)
+
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V25.1)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V25.3)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 批量添加 (空格分隔)\n`/remove [代码]` : 删除自选\n`/list` : 查看我的看板", inline=False)
-    embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
+    embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析\n`/scores` : 查看评分标准", inline=False)
     embed.set_footer(text="FMP Ultimate API • 机构级多因子模型")
     await interaction.response.send_message(embed=embed)
 
@@ -614,7 +668,6 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
     for ticker in stock_list:
         try:
             print(f"🚀 [CHECK] Processing {ticker}...")
-            # ⚠️ 这里的解包必须与 analyze_daily_signals 返回值匹配 (2个)
             price, signals = await loop.run_in_executor(None, analyze_daily_signals, ticker)
             
             if price is None:
@@ -623,7 +676,7 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
                 continue
             if not signals: signals.append("趋势平稳，暂无异动")
             
-            # ⚠️ 这里的解包必须与 generate_report_content 返回值匹配 (3个)
+            # V25.1修复: 接收3个返回值
             score, desc_final, _ = generate_report_content(signals)
             text_part, color = format_dashboard_title(score)
             
@@ -634,7 +687,7 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
             embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
             
             await interaction.followup.send(embed=embed)
-            print(f"✅ [CHECK] Sent result for {ticker}, Score: {score}")
+            print(f"✅ [CHECK] Sent result for {ticker}, Score: {score:.1f} (Signals: {len(signals)}/{TOTAL_CHECK_POINTS})")
             
         except Exception as e:
             print(f"❌ [ERROR] {ticker}: {e}")
@@ -674,7 +727,7 @@ async def list_stocks(interaction: discord.Interaction):
     user_stocks = watch_data.get(user_id, {})
     if not user_stocks: return await interaction.response.send_message("📭 您的个人列表为空")
     
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
     print(f"📊 [LIST] Generating for user {user_id}...")
     
     loop = asyncio.get_running_loop()
@@ -695,29 +748,28 @@ async def list_stocks(interaction: discord.Interaction):
 
         if not signals: signals = ["趋势平稳"]
         
-        # ⚠️ 使用第3个返回值: reasons
+        # V25.1: 使用第3个返回值 reasons
         score, _, reasons = generate_report_content(signals)
         
-        # 提取主理由
         main_reason = "趋势平稳"
         if reasons:
             main_reason = reasons[0]
-            # 简单清洗一下文本，去掉可能存在的 Markdown 符号
-            main_reason = main_reason.replace("*", "").replace("`", "")
-            
+            main_reason = main_reason.replace("*", "").replace("`", "").strip()
+            if " " in main_reason:
+                main_reason = main_reason.split(" ", 1)[1]
+        
         text_part, _ = format_dashboard_title(score)
-        # 格式: 01. TSLA ($391): 史诗暴涨 (+9.5) ⭐... | Nx 牛市排列
         short_status = text_part.split(' ')[0] + text_part.split(' ')[1]
         icons = text_part.split(' ')[2]
         
-        line = f"`{i+1:02d}.` **{ticker.ljust(5)}** (`${price:.1f}`): {short_status} {icons} | {main_reason}"
+        line = f"**{ticker.ljust(5)}**: {short_status} {icons}\n└ {main_reason}"
         lines.append(line)
 
-    embed = discord.Embed(title=f"📊 {interaction.user.name} 的实时行情墙", color=discord.Color.blue())
+    embed = discord.Embed(title="📊 监控面板", color=discord.Color.blue())
     embed.description = "\n".join(lines)
     
     ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
-    embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}\n💡 使用 /check [代码] 查看详细图表与指标")
+    embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}\n💡 使用 /check [代码] 查看详细指标")
     
     await interaction.followup.send(embed=embed)
     print(f"✅ [LIST] Done for user {user_id}")
@@ -749,7 +801,6 @@ async def daily_monitor():
         for i, (price, signals) in enumerate(results):
             ticker = tickers[i]
             if signals:
-                # ⚠️ 这里的解包必须匹配
                 score, desc_final, _ = generate_report_content(signals)
                 
                 should_alert = False
@@ -764,7 +815,7 @@ async def daily_monitor():
                     embed.set_image(url=get_finviz_chart_url(ticker))
                     embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_now_str}")
                     user_alerts.append(embed)
-                    print(f"  -> Alert: {ticker} (Score: {score}) (Signals: {len(signals)}/{TOTAL_CHECK_POINTS})")
+                    print(f"  -> Alert: {ticker} (Score: {score:.1f}) (Signals: {len(signals)}/{TOTAL_CHECK_POINTS})")
 
         if user_alerts:
             save_data()
