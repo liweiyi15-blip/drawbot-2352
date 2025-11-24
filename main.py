@@ -80,22 +80,54 @@ def get_signal_category_and_score(s):
     if any(x in s for x in o_bear_1): return 'oscillator', -1
     return 'other', 0
 
-def calculate_total_score(signals):
-    scores = {'trend': [], 'pattern': [], 'oscillator': [], 'volume': [], 'timing': []}
+def generate_report_content(signals):
+    """
+    V5.7 核心升级：生成带去重说明的详细报告，并计算总分
+    """
+    # 1. 解析所有信号
+    items = []
     for s in signals:
         cat, score = get_signal_category_and_score(s)
-        if cat in scores and score != 0: scores[cat].append(score)
-    total = 0
-    if scores['trend']: total += max(scores['trend'], key=abs)
-    if scores['pattern']: total += max(scores['pattern'], key=abs)
-    if scores['oscillator']: total += max(scores['oscillator'], key=abs)
-    if scores['volume']: total += sum(scores['volume'])
-    if scores['timing']: total += sum(scores['timing'])
-    return total
+        items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
-def get_signal_score(s):
-    _, score = get_signal_category_and_score(s)
-    return score
+    # 2. 标记有效信号 (Active)
+    # 资金和择时：全部有效 (可叠加)
+    for item in items:
+        if item['cat'] in ['volume', 'timing']:
+            item['active'] = True
+
+    # 结构、形态、摆动：同类取最大值 (Max Pooling)
+    for cat in ['trend', 'pattern', 'oscillator']:
+        cat_items = [i for i in items if i['cat'] == cat]
+        if cat_items:
+            # 找到绝对值分最高的那个
+            best = max(cat_items, key=lambda x: abs(x['score']))
+            # 标记为有效
+            # 注意：如果有多个同分，只取第一个作为有效，其他去重
+            best['active'] = True
+
+    # 3. 计算总分 & 生成文本
+    total_score = 0
+    lines = []
+    
+    cat_names = {'trend': '趋势', 'pattern': '形态', 'oscillator': '摆动'}
+
+    for item in items:
+        score_val = item['score']
+        # 格式化分数：+3, -2
+        score_str = f"+{score_val}" if score_val > 0 else f"{score_val}"
+        
+        if item['active']:
+            total_score += score_val
+            # 有效信号：加粗标题显示
+            lines.append(f"### {item['raw']} ({score_str})")
+        else:
+            # 去重信号：使用引用格式 > 降级显示，并说明原因
+            reason = cat_names.get(item['cat'], '同类')
+            if score_val != 0: # 0分的不显示去重，没意义
+                lines.append(f"> 🔸 {item['raw']} ({score_str}) [已去重]")
+
+    return total_score, "\n".join(lines)
 
 def format_dashboard_title(score):
     count = int(min(abs(score), 8))
@@ -108,7 +140,9 @@ def format_dashboard_title(score):
     elif score <= -4: status, color = "极度高危", discord.Color.green()
     elif score <= -1: status, color = "趋势看空", discord.Color.dark_teal()
     else: status, color = "震荡整理", discord.Color.gold()
-    return f"{status} ({score:+}) {icons}", color
+    # 标题分数也带加号
+    score_title = f"+{score}" if score > 0 else f"{score}"
+    return f"{status} ({score_title}) {icons}", color
 
 # ================= FMP API =================
 def get_finviz_chart_url(ticker):
@@ -154,7 +188,7 @@ def analyze_daily_signals(ticker):
     if df is None or len(df) < 250: return None, None
     signals = []
     
-    # ------------------ 常规指标 ------------------
+    # 指标计算
     df['nx_blue_up'] = df['high'].ewm(span=24, adjust=False).mean()
     df['nx_blue_dw'] = df['low'].ewm(span=23, adjust=False).mean()
     df['nx_yell_up'] = df['high'].ewm(span=89, adjust=False).mean()
@@ -178,83 +212,24 @@ def analyze_daily_signals(ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
 
-    # ================= 🚀 V5.6 核心修复: 手写九转算法 =================
-    # 不再调用 df.ta.td_seq，不再依赖库版本，100% 稳定
-    
+    # ================= 内置算法: 九转/十三转 =================
     try:
-        # 为了速度，只取最近50根K线计算
-        # 注意：这里我们使用 copy() 避免 SettingWithCopyWarning
         work_df = df.iloc[-50:].copy()
         c = work_df['CLOSE'].values
         h = work_df['HIGH'].values
         l = work_df['LOW'].values
         
-        # --- 1. 神奇九转 (TD Setup) ---
-        # 逻辑：连续9天收盘价 高于/低于 4天前收盘价
-        buy_setup = 0  # 连续下跌计数
-        sell_setup = 0 # 连续上涨计数
-        
-        # 我们需要知道当前(最后一个bar)的计数是多少
-        # 从第4根开始遍历
+        buy_setup = 0; sell_setup = 0
         for i in range(4, len(c)):
-            # 卖出结构 (Red)
-            if c[i] > c[i-4]:
-                sell_setup += 1
-                buy_setup = 0
-            # 买入结构 (Green)
-            elif c[i] < c[i-4]:
-                buy_setup += 1
-                sell_setup = 0
-            else:
-                buy_setup = 0
-                sell_setup = 0
+            if c[i] > c[i-4]: sell_setup += 1; buy_setup = 0
+            elif c[i] < c[i-4]: buy_setup += 1; sell_setup = 0
+            else: buy_setup = 0; sell_setup = 0
         
-        # 判定
-        if buy_setup == 9:
-            signals.append("神奇九转: 底部买入信号 (9)")
-        elif sell_setup == 9:
-            signals.append("神奇九转: 顶部卖出信号 (9)")
-
-        # --- 2. 迪玛克十三转 (TD Countdown) ---
-        # 逻辑简化版 (Sequential): Setup完成后，计数13个符合条件的K线
-        # 为了不让逻辑过于复杂导致崩溃，这里实现一个标准版检测
-        # 计数条件：
-        # 买入倒数：Close <= Low[2]
-        # 卖出倒数：Close >= High[2]
-        
-        countdown_buy = 0
-        countdown_sell = 0
-        
-        # 从第2根开始
-        for i in range(2, len(c)):
-            if c[i] >= h[i-2]:
-                countdown_sell += 1
-            if c[i] <= l[i-2]:
-                countdown_buy += 1
-        
-        # 如果当前这根K线正好触发了13
-        # 注意：这里为了简化，我们检测累积计数是否正好落在13的倍数附近，或者就在今天完成
-        # 这是一个近似实现，对于日线级别的提醒已经足够精确
-        
-        # 更严格的逻辑：必须先完成Setup9。
-        # 考虑到Bot的稳定性，我们直接检测“当前K线是否满足13转条件”且“累计计数达到13”
-        
-        is_13_buy = (c[-1] <= l[-3]) # 今天满足条件
-        # 我们假设过去一段时间已经积累了足够的计数。
-        # 为了严谨，我们仅在检测到明显的 Setup 9 之后的趋势延续时提示
-        # 如果 buy_setup 很大（例如 > 9）且满足倒数条件，提示13风险
-        
-        # 由于完全手写13转状态机太复杂且易错，这里采用“趋势衰竭”算法代替：
-        # 如果 setup 计数达到 13，提示“强弩之末”
-        if buy_setup == 13:
-             signals.append("迪玛克十三转: 终极底部 (13)")
-        elif sell_setup == 13:
-             signals.append("迪玛克十三转: 终极顶部 (13)")
-
-    except Exception as e:
-        print(f"Algo Error: {e}")
-
-    # ==============================================================
+        if buy_setup == 9: signals.append("神奇九转: 底部买入信号 (9)")
+        elif sell_setup == 9: signals.append("神奇九转: 顶部卖出信号 (9)")
+        if buy_setup == 13: signals.append("迪玛克十三转: 终极底部 (13)")
+        elif sell_setup == 13: signals.append("迪玛克十三转: 终极顶部 (13)")
+    except Exception as e: print(f"Algo Error: {e}")
 
     # Nx
     is_break_blue = prev['CLOSE'] < prev['NX_BLUE_UP'] and curr['CLOSE'] > curr['NX_BLUE_UP']
@@ -295,17 +270,16 @@ def analyze_daily_signals(ticker):
     return price, signals
 
 # ================= Bot 指令集 =================
-
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V5.6 内置算法版Bot已启动 (无依赖模式): {bot.user}')
+    print(f'✅ V5.7 机构可视化版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V5.6)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V5.7)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
@@ -322,12 +296,18 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
             await interaction.followup.send(f"❌ 无法获取 {ticker} 数据")
             continue
         if not signals: signals.append("趋势平稳，暂无异动")
-        score = calculate_total_score(signals)
+        
+        # 使用新的生成函数获取总分和文本
+        score, desc_final = generate_report_content(signals)
         text_part, color = format_dashboard_title(score)
-        desc_final = "\n".join([f"### {s} ({get_signal_score(s)})" for s in signals])
+        
         embed = discord.Embed(title=f"{ticker} : {text_part}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
         embed.set_image(url=get_finviz_chart_url(ticker))
-        embed.set_footer(text="FMP Ultimate API • 机构级多因子模型")
+        
+        # 动态页脚时间
+        ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
+        embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
+        
         await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="add", description="添加个人监控")
@@ -374,25 +354,32 @@ async def daily_monitor():
     if not channel: return
     today = datetime.datetime.now().strftime('%Y-%m-%d')
     print(f"🔎 启动收盘扫描: {today} (美东 16:01)")
+    
+    # 动态获取纽约时间用于页脚
+    ny_now_str = datetime.datetime.now(ny_tz).strftime('%H:%M')
+
     for user_id, stocks in watch_data.items():
         user_alerts = []
         for ticker, data in stocks.items():
             try:
                 price, signals = analyze_daily_signals(ticker)
                 if signals:
+                    # 获取去重后的分数和文本
+                    score, desc_final = generate_report_content(signals)
+                    
                     should_alert = False
                     mode = data['mode']
                     if mode == 'always': should_alert = True
-                    is_lv4 = any(get_signal_score(s) in [4, -4] for s in signals)
+                    is_lv4 = abs(score) >= 4 # 简单判定：总分超过4分为高危/极强
                     if mode == 'once_daily' and data.get('last_alert_date') != today: should_alert = True
+                    
                     if should_alert:
                         data['last_alert_date'] = today
-                        score = calculate_total_score(signals)
                         text_part, color = format_dashboard_title(score)
-                        desc_final = "\n".join([f"### {s} ({get_signal_score(s)})" for s in signals])
+                        
                         embed = discord.Embed(title=f"{ticker} : {text_part}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
                         embed.set_image(url=get_finviz_chart_url(ticker))
-                        embed.set_footer(text="FMP Ultimate API • 机构级多因子模型")
+                        embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_now_str}")
                         user_alerts.append(embed)
             except Exception as e: print(f"Error {ticker}: {e}")
         if user_alerts:
