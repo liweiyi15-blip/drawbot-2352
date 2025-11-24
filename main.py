@@ -4,11 +4,14 @@ from discord.ext import commands, tasks
 import requests
 import pandas as pd
 import pandas_ta as ta
+import numpy as np
 import datetime
 import os
 import json
 import asyncio
 import pytz 
+import math
+import time
 from dateutil import parser
 
 # ================= 配置区域 =================
@@ -25,6 +28,8 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 watch_data = {}
+# 统计系统覆盖的总指标判定点数量 (多空双向)
+TOTAL_CHECK_POINTS = 85 
 
 # ================= 数据存取 =================
 def load_data():
@@ -44,13 +49,14 @@ def save_data():
         with open(DATA_FILE, 'w') as f: json.dump(watch_data, f, indent=4)
     except Exception as e: print(f"❌ 保存失败: {e}")
 
-# ================= 🧠 战法说明书 =================
+# ================= 🧠 全战法说明书 (V23.0) =================
 def get_signal_advice(t):
     advice = ""
-    # 0. 估值/事件
+    # --- 0. 估值/事件 ---
     if "财报" in t: advice = "财报窗口期，波动剧烈，强行五五开，建议避险。"
-    elif "历史低位" in t: advice = "估值处历史底部，黄金坑机会。"
-    elif "历史高位" in t: advice = "估值高于历史均值，需业绩消化。"
+    elif "历史低位" in t: advice = "估值处历史底部，均值回归动力强，黄金坑。"
+    elif "历史高位" in t: advice = "估值高于历史均值，需业绩高增长消化。"
+    elif "华尔街" in t: advice = "机构分析师共识，大资金风向标。"
     elif "DCF 低估" in t: advice = "低于内在价值，安全边际高。"
     elif "DCF 溢价" in t: advice = "高于内在价值，透支未来预期。"
     elif "PEG 低估" in t: advice = "高增长消化估值，极具性价比。"
@@ -60,7 +66,11 @@ def get_signal_advice(t):
     elif "PE 低估" in t: advice = "市盈率处于低位，价格便宜。"
     elif "PE 溢价" in t: advice = "市盈率处于高位，情绪溢价。"
     
-    # 1. 形态
+    # --- 1. 期权/情绪 ---
+    elif "PCR" in t: advice = "期权情绪极值，散户过度一致，往往反向变盘。"
+    elif "HV" in t: advice = "波动率降至冰点，能量积蓄完毕，即将选择方向。"
+
+    # --- 2. 形态 ---
     elif "三角旗" in t: advice = "整理结束放量突破，主升浪开启。"
     elif "双底" in t: advice = "双底探明，突破颈线，反转确立。"
     elif "双顶" in t: advice = "双顶确立，跌破颈线，见顶信号。"
@@ -68,25 +78,25 @@ def get_signal_advice(t):
     elif "回踩" in t: advice = "缩量回踩均线不破，最佳买点。"
     elif "三线打击" in t: advice = "大阳吞没三阴，罕见暴力反转。"
     elif "趋势线" in t: advice = "低点抬高，回踩支撑，趋势向上。"
+    elif "跳空" in t: advice = "资金强势抢筹或出逃，动能极强。"
+    elif "布林收口" in t: advice = "波动率极低，变盘在即，盯紧方向。"
     elif "早晨" in t or "锤子" in t: advice = "底部多头抵抗，止跌反弹信号。"
     elif "黄昏" in t or "断头" in t: advice = "顶部空头反扑，见顶回落信号。"
     elif "吞没" in t or "包" in t: advice = "反向吞没，力量逆转，变盘在即。"
-    elif "跳空" in t: advice = "资金强势抢筹或出逃，动能极强。"
-    elif "布林收口" in t: advice = "波动率极低，变盘在即，盯紧方向。"
 
-    # 2. 择时
+    # --- 3. 择时 ---
     elif "九转" in t and "买" in t: advice = "连跌九天，物极必反，博弈反弹。"
     elif "九转" in t and "卖" in t: advice = "连涨九天，动能衰竭，注意回调。"
     elif "十三转" in t: advice = "趋势衰竭至极值，变盘一触即发。"
     
-    # 3. 资金
+    # --- 4. 资金 ---
     elif "爆量" in t: advice = "巨量异动，主力大举进出。"
     elif "放量" in t: advice = "量价齐升，上涨健康，趋势向好。"
     elif "缩量" in t: advice = "缩量洗盘或背离，关注变盘。"
     elif "VWAP 站上" in t: advice = "站上机构成本线，日内多头主导。"
     elif "VWAP 跌破" in t: advice = "跌破机构成本线，日内空头主导。"
     
-    # 4. 趋势
+    # --- 5. 趋势 ---
     elif "Supertrend 看多" in t: advice = "站稳止损线，趋势向上，持股。"
     elif "Supertrend 看空" in t: advice = "跌破止损线，趋势转空，离场。"
     elif "Nx 牛市" in t: advice = "价格沿上升通道运行，持股待涨。"
@@ -95,63 +105,88 @@ def get_signal_advice(t):
     elif "ADX" in t: advice = "趋势强度走高，单边行情加速。"
     elif "多头" in t: advice = "均线发散向上，最强多头趋势。"
     elif "空头" in t: advice = "均线发散向下，最弱空头趋势。"
+    elif "年线" in t: advice = "长期趋势的分水岭。"
+    elif "金叉" in t: advice = "短线趋势转强，买入信号。"
+    elif "死叉" in t: advice = "短线趋势转弱，卖出信号。"
+    elif "站上" in t: advice = "收复关键均线，多头反击。"
+    elif "跌破" in t: advice = "失守关键均线，破位风险。"
+    elif "R1" in t or "S1" in t: advice = "触及斐波那契关键位。"
+    elif "唐奇安" in t: advice = "触及20日极值，海龟交易法则。"
     
-    # 5. 摆动
+    # --- 6. 摆动 ---
     elif "背离" in t: advice = "价格与指标背离，动能衰竭。"
     elif "反钩" in t: advice = "超跌后极值反弹，短线金叉。"
+    elif "布林上轨" in t: advice = "突破上轨，加速上涨或超买。"
+    elif "布林下轨" in t: advice = "跌破下轨，加速下跌或超卖。"
+    elif "CCI" in t: advice = "顺势指标极值，关注回归。"
+    elif "WillR" in t: advice = "威廉指标极值，超买超卖信号。"
     elif "超买" in t: advice = "情绪过热，勿追高，防回调。"
     elif "超卖" in t: advice = "情绪冰点，勿杀跌，博反弹。"
     
     return advice
 
-# ================= ⚖️ 评分系统 =================
+# ================= ⚖️ 评分系统 (V23.0) =================
 def get_signal_category_and_score(s):
     s = s.strip()
     
-    # 0. 估值/事件
+    # 0. 估值/事件 (0分)
     if "财报" in s: return 'fundamental', 0 
-    if "历史" in s: return 'fundamental', 3 if "低位" in s else 0
-    if "DCF" in s: return 'fundamental', 2 if "低估" in s else 0
-    if "PEG" in s: return 'fundamental', 2 if "低估" in s else 0
-    if "PS" in s: return 'fundamental', 2 if "低估" in s else 0
-    if "PE" in s: return 'fundamental', 2 if "低估" in s else 0
+    if "历史高位" in s: return 'fundamental', 0 
+    if "溢价" in s: return 'fundamental', 0
+    
+    # 0. 估值 (加分)
+    if "华尔街" in s: return 'fundamental', 1.5 if "买入" in s else -1.5
+    if "历史低位" in s: return 'fundamental', 1.5 
+    if "低估" in s: return 'fundamental', 1.0
 
-    # 1. 形态/支撑 (Pattern)
-    if "三线打击" in s: return 'pattern', 5
-    if "双底" in s or "杯柄" in s or "三角旗突破" in s: return 'pattern', 4
-    if "双顶" in s or "三角旗跌破" in s: return 'pattern', -4
-    if "回踩" in s or "趋势线" in s or "布林收口" in s: return 'pattern', 3
-    if "跳空" in s: return 'pattern', 3 if "上" in s else -3
-    if any(x in s for x in ["早晨", "阳包阴", "锤子"]): return 'pattern', 4
-    if any(x in s for x in ["断头", "阴包阳", "射击", "黄昏", "墓碑"]): return 'pattern', -4
+    # 1. 期权/情绪
+    if "PCR" in s: return 'pattern', 2.0 if "恐慌" in s else -2.0
+    if "HV" in s: 
+        if "蓄势" in s: return 'pattern', 1.5 if "看多" in s else -1.5
+        if "恐慌" in s: return 'pattern', 1.5
+        if "高潮" in s: return 'pattern', -1.5
 
-    # 2. 择时
+    # 2. 形态 (Pattern)
+    if "三线打击" in s: return 'pattern', 2.5
+    if any(x in s for x in ["双底", "杯柄", "三角旗突破"]): return 'pattern', 2.0
+    if any(x in s for x in ["双顶", "三角旗跌破"]): return 'pattern', -2.0
+    if "回踩" in s or "趋势线" in s or "布林收口" in s: return 'pattern', 1.5
+    if "跳空" in s: return 'pattern', 1.5 if "上" in s else -1.5
+    if any(x in s for x in ["早晨", "阳包阴", "锤子"]): return 'pattern', 1.0
+    if any(x in s for x in ["断头", "阴包阳", "射击", "黄昏", "墓碑"]): return 'pattern', -1.0
+
+    # 3. 择时 (Timing)
     if "九转" in s or "十三转" in s:
-        return 'timing', 4 if ("买入" in s or "底部" in s) else -4
+        return 'timing', 2.0 if ("买入" in s or "底部" in s) else -2.0
         
-    # 3. 资金
-    if "VWAP" in s: return 'volume', 2 if "站上" in s else -2
-    if "盘中爆量" in s: return 'volume', 4 if "抢筹" in s else -4
-    if "放量" in s: return 'volume', 3 if "大涨" in s else -3
-    if "缩量" in s: return 'volume', 1 if "回调" in s else -1
+    # 4. 资金 (Volume)
+    if "VWAP" in s: return 'volume', 1.0 if "站上" in s else -1.0
+    if "盘中爆量" in s: return 'volume', 2.0 if "抢筹" in s else -2.0
+    if "放量" in s: return 'volume', 1.0 if "大涨" in s else -1.0
+    if "缩量" in s: return 'volume', 1.0 if "回调" in s else -1.0
     
-    # 4. 趋势
-    if "Supertrend" in s: return 'trend', 3 if "看多" in s else -3
-    if "ADX" in s: return 'trend', 1
-    if any(x in s for x in ["多头", "年线", "唐奇安上"]): return 'trend', 3
-    if any(x in s for x in ["空头", "年线", "唐奇安下"]): return 'trend', -3
-    if any(x in s for x in ["Nx 突破", "Nx 站稳", "Nx 牛市", "R1"]): return 'trend', 2
-    if any(x in s for x in ["Nx 跌破", "Nx 熊市", "S1"]): return 'trend', -2
-    if "站上" in s: return 'trend', 1
-    if "跌破" in s: return 'trend', -1
+    # 5. 趋势 (Trend)
+    if "Supertrend" in s: return 'trend', 1.5 if "看多" in s else -1.5
+    if "ADX" in s: return 'trend', 1.0
+    if "黄金交叉" in s: return 'trend', 1.5
+    if "死亡交叉" in s: return 'trend', -1.5
+    if any(x in s for x in ["多头", "年线", "唐奇安上"]): return 'trend', 1.0
+    if any(x in s for x in ["空头", "年线", "唐奇安下"]): return 'trend', -1.0
+    if any(x in s for x in ["Nx 突破", "Nx 站稳", "Nx 牛市", "R1"]): return 'trend', 1.0
+    if any(x in s for x in ["Nx 跌破", "Nx 熊市", "S1"]): return 'trend', -1.0
+    if "站上" in s: return 'trend', 0.5
+    if "跌破" in s: return 'trend', -0.5
     
-    # 5. 摆动
-    if "背离" in s: return 'oscillator', 3 if "底" in s else -3
-    if "反钩" in s: return 'oscillator', 2
-    if "金叉" in s or "布林" in s or "超卖" in s: return 'oscillator', 1
-    if "死叉" in s or "超买" in s: return 'oscillator', -1
+    # 6. 摆动 (Oscillator)
+    if "背离" in s: return 'oscillator', 1.5 if "底" in s else -1.5
+    if "反钩" in s: return 'oscillator', 1.0
+    if "金叉" in s or "布林" in s or "超卖" in s or "CCI 超卖" in s or "WillR 超卖" in s: return 'oscillator', 0.5
+    if "死叉" in s or "超买" in s or "CCI 超买" in s or "WillR 超买" in s: return 'oscillator', -0.5
     
     return 'other', 0
+
+def calculate_linear_score(raw_score):
+    return raw_score / 2.0
 
 def generate_report_content(signals):
     items = []
@@ -169,7 +204,7 @@ def generate_report_content(signals):
             best = max(cat_items, key=lambda x: abs(x['score']))
             best['active'] = True
 
-    total_score = 0
+    raw_sum = 0
     earnings_blocks = [] 
     active_list = []     
     inactive_lines = []  
@@ -179,7 +214,7 @@ def generate_report_content(signals):
         score_str = f"+{score_val}" if score_val > 0 else f"{score_val}"
         
         if item['active']:
-            total_score += score_val
+            raw_sum += score_val
             block = f"### {item['raw']} ({score_str})"
             advice = get_signal_advice(item['raw'])
             if advice: block += f"\n> {advice}"
@@ -188,12 +223,10 @@ def generate_report_content(signals):
                 icon = "### 🚨 " if "高危" in item['raw'] else "### ⚠️ "
                 block = block.replace("### ", icon)
                 earnings_blocks.append(block)
-            
             elif score_val == 0:
                 block = f"ℹ️ **{item['raw']}**"
                 if advice: block += f"\n> {advice}"
                 active_list.append({'block': block, 'score': 0})
-                
             else:
                 active_list.append({'block': block, 'score': score_val})
         else:
@@ -201,14 +234,11 @@ def generate_report_content(signals):
                 inactive_lines.append(f"🔸 {item['raw']} ({score_str}) [已去重]")
 
     active_list.sort(key=lambda x: abs(x['score']) if x['score'] != 0 else -1, reverse=True)
-    
     final_blocks = earnings_blocks + [x['block'] for x in active_list]
     final_text = "\n".join(final_blocks)
-    if inactive_lines: 
-        final_text += "\n\n" + "\n".join(inactive_lines)
-        
-    # 线性归一化：20分=10分
-    final_score = total_score / 2.0
+    if inactive_lines: final_text += "\n\n" + "\n".join(inactive_lines)
+    
+    final_score = calculate_linear_score(raw_sum)
     return final_score, final_text
 
 def format_dashboard_title(score):
@@ -233,7 +263,7 @@ def get_valuation_and_earnings(ticker, current_price):
     if not FMP_API_KEY: return []
     sigs = []
     try:
-        # 1. 📅 财报
+        # 1. 财报
         today = datetime.date.today()
         future_str = (today + datetime.timedelta(days=14)).strftime('%Y-%m-%d')
         today_str = today.strftime('%Y-%m-%d')
@@ -249,7 +279,32 @@ def get_valuation_and_earnings(ticker, current_price):
                         if 0 <= diff <= 14: sigs.append(f"财报预警 (T-{diff}天)")
                         break 
 
-        # 2. 估值
+        # 2. 华尔街共识
+        rec_url = f"https://financialmodelingprep.com/stable/analyst-stock-recommendations?symbol={ticker}&apikey={FMP_API_KEY}"
+        rec_resp = requests.get(rec_url, timeout=10)
+        if rec_resp.status_code == 200:
+            rec_data = rec_resp.json()
+            if rec_data:
+                rd = rec_data[0]
+                buy = rd.get('analystRatingsbuy', 0) + rd.get('analystRatingsStrongBuy', 0)
+                sell = rd.get('analystRatingsSell', 0) + rd.get('analystRatingsStrongSell', 0)
+                total = buy + sell + rd.get('analystRatingsHold', 0)
+                if total > 0:
+                    if buy/total > 0.7: sigs.append("🏦 华尔街共识: 强力买入")
+                    elif sell/total > 0.5: sigs.append("🏦 华尔街共识: 卖出")
+
+        # 3. PCR
+        pcr_url = f"https://financialmodelingprep.com/stable/stock/put-call-ratio?symbol={ticker}&apikey={FMP_API_KEY}"
+        pcr_resp = requests.get(pcr_url, timeout=5)
+        if pcr_resp.status_code == 200:
+            pcr_data = pcr_resp.json()
+            if pcr_data:
+                pcr_val = pcr_data[0].get('putCallRatio')
+                if pcr_val:
+                    if pcr_val > 1.5: sigs.append(f"PCR 恐慌极值 ({pcr_val:.2f})")
+                    elif pcr_val < 0.5: sigs.append(f"PCR 贪婪极值 ({pcr_val:.2f})")
+
+        # 4. 估值
         r_url = f"https://financialmodelingprep.com/stable/ratios-ttm?symbol={ticker}&apikey={FMP_API_KEY}"
         r_resp = requests.get(r_url, timeout=10)
         current_pe=None; current_ps=None; current_peg=None; eps_ttm=0
@@ -262,7 +317,7 @@ def get_valuation_and_earnings(ticker, current_price):
                 current_peg = rd.get('priceToEarningsGrowthRatioTTM')
                 eps_ttm = rd.get('netIncomePerShareTTM', 0)
 
-        # 3. 历史估值
+        # 5. 历史估值
         h_url = f"https://financialmodelingprep.com/stable/ratios?symbol={ticker}&limit=3&apikey={FMP_API_KEY}"
         h_resp = requests.get(h_url, timeout=10)
         avg_pe=0; avg_ps=0
@@ -286,7 +341,7 @@ def get_valuation_and_earnings(ticker, current_price):
                 if current_ps < avg_ps * 0.8: sigs.append(f"PS 历史低位: {current_ps:.2f} [均值 {avg_ps:.2f}]")
                 elif current_ps > avg_ps * 1.3: sigs.append(f"PS 历史高位: {current_ps:.2f} [均值 {avg_ps:.2f}]")
 
-        # 4. DCF
+        # 6. DCF
         d_url = f"https://financialmodelingprep.com/stable/discounted-cash-flow?symbol={ticker}&apikey={FMP_API_KEY}"
         d_resp = requests.get(d_url, timeout=10)
         if d_resp.status_code == 200:
@@ -341,7 +396,9 @@ def analyze_daily_signals(ticker):
     df['nx_blue_dw'] = df['low'].ewm(span=23, adjust=False).mean()
     df['nx_yell_up'] = df['high'].ewm(span=89, adjust=False).mean()
     df['nx_yell_dw'] = df['low'].ewm(span=90, adjust=False).mean()
-    mas = [5, 10, 20, 30, 60, 120, 200]
+    df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
+    df['hv'] = df['log_ret'].rolling(window=20).std() * np.sqrt(252) * 100
+    mas = [5, 10, 20, 30, 50, 60, 120, 200]
     for m in mas: df.ta.sma(length=m, append=True)
     df.ta.bbands(length=20, std=2, append=True)
     df.ta.macd(fast=12, slow=26, signal=9, append=True)
@@ -354,7 +411,6 @@ def analyze_daily_signals(ticker):
     except: pass
     try: df.ta.vwap(append=True)
     except: pass
-    
     df.ta.willr(length=14, append=True); df.ta.cci(length=20, append=True)
     df.ta.obv(append=True)
     df.ta.atr(length=14, append=True); df.ta.donchian(lower_length=20, upper_length=20, append=True)
@@ -363,15 +419,40 @@ def analyze_daily_signals(ticker):
     
     df['VOL_MA_20'] = df.ta.sma(close='volume', length=20)
     df.columns = [str(c).upper() for c in df.columns]
-
-    curr = df.iloc[-1]; prev = df.iloc[-2]; 
-    price = curr['CLOSE']
+    curr = df.iloc[-1]; prev = df.iloc[-2]; price = curr['CLOSE']
 
     # 0. 估值
     val_sigs = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
-    # 1. 机构/资金
+    # 1. 均线/MA交叉
+    if (curr['SMA_5'] > curr['SMA_10'] > curr['SMA_20'] > curr['SMA_60']): signals.append("均线多头排列")
+    if (curr['SMA_5'] < curr['SMA_10'] < curr['SMA_20'] < curr['SMA_60']): signals.append("均线空头排列")
+    if 'SMA_50' in df.columns and 'SMA_200' in df.columns:
+        if prev['SMA_50'] < prev['SMA_200'] and curr['SMA_50'] > curr['SMA_200']:
+            signals.append("黄金交叉 (MA50/200)")
+        elif prev['SMA_50'] > prev['SMA_200'] and curr['SMA_50'] < curr['SMA_200']:
+            signals.append("死亡交叉 (MA50/200)")
+    for m in [20, 60, 200]:
+        c = f'SMA_{m}'
+        if c in df.columns:
+            if prev['CLOSE'] < prev[c] and curr['CLOSE'] > curr[c]:
+                name = "年线" if m == 200 else f"MA{m}"
+                signals.append(f"站上 {name} ({curr[c]:.2f})")
+            elif prev['CLOSE'] > prev[c] and curr['CLOSE'] < curr[c]:
+                name = "年线" if m == 200 else f"MA{m}"
+                signals.append(f"跌破 {name} ({curr[c]:.2f})")
+
+    # 2. 波动/资金/期权
+    if 'HV' in df.columns:
+        curr_hv = curr['HV']
+        if curr_hv < 20:
+            if curr['CLOSE'] > curr['SMA_20']: signals.append(f"HV 蓄势看多 ({curr_hv:.1f})")
+            else: signals.append(f"HV 蓄势看空 ({curr_hv:.1f})")
+        elif curr_hv > 80: # 新增高波逻辑
+            if curr['CLOSE'] < curr['SMA_20']: signals.append(f"HV 恐慌极值 ({curr_hv:.1f})")
+            else: signals.append(f"HV 高潮极值 ({curr_hv:.1f})")
+
     if 'VWAP_D' in df.columns:
         if curr['CLOSE'] > curr['VWAP_D']: signals.append("VWAP 站上")
         else: signals.append("VWAP 跌破")
@@ -383,16 +464,24 @@ def analyze_daily_signals(ticker):
         elif rvol > 1.5 and curr['CLOSE'] > prev['CLOSE']: signals.append(f"放量大涨 (量比:{rvol:.1f}x)")
         elif rvol < 0.6 and curr['CLOSE'] < prev['CLOSE']: signals.append(f"缩量回调 (量比:{rvol:.1f}x)")
 
-    # 2. 形态
+    # 3. 形态
+    bbu = 'BBU_20_2.0' if 'BBU_20_2.0' in df.columns else 'BBU_20_2'
+    bbl = 'BBL_20_2.0' if 'BBL_20_2.0' in df.columns else 'BBL_20_2'
+    if bbu in df.columns:
+        if curr['CLOSE'] > curr[bbu]: signals.append("突破布林上轨")
+        if curr['CLOSE'] < curr[bbl]: signals.append("跌破布林下轨")
+        bw = (curr[bbu] - curr[bbl]) / curr['SMA_20']
+        min_bw = ((df[bbu] - df[bbl]) / df['SMA_20']).iloc[-20:].min()
+        if bw <= min_bw * 1.05: signals.append("🤐 布林收口 (变盘前夜)")
+
     ret_20 = (curr['CLOSE'] - df['CLOSE'].iloc[-21]) / df['CLOSE'].iloc[-21]
     high_10 = df['HIGH'].iloc[-11:-1].max()
     if ret_20 > 0.10 and curr['CLOSE'] > high_10 and curr['VOLUME'] > vol_ma * 1.5:
         signals.append("🏴 三角旗形突破")
-    
     low_10 = df['LOW'].iloc[-11:-1].min()
     if ret_20 < -0.10 and curr['CLOSE'] < low_10 and curr['VOLUME'] > vol_ma * 1.5:
         signals.append("🏴 三角旗形跌破")
-
+    
     if (df['CLOSE'].iloc[-2] < df['OPEN'].iloc[-2]) and \
        (df['CLOSE'].iloc[-3] < df['OPEN'].iloc[-3]) and \
        (df['CLOSE'].iloc[-4] < df['OPEN'].iloc[-4]) and \
@@ -403,26 +492,21 @@ def analyze_daily_signals(ticker):
 
     try:
         recent_60 = df.iloc[-60:]
-        l1 = recent_60['LOW'].iloc[:30].min()
-        l2 = recent_60['LOW'].iloc[30:].min()
+        l1 = recent_60['LOW'].iloc[:30].min(); l2 = recent_60['LOW'].iloc[30:].min()
         neck_w = recent_60['HIGH'].iloc[15:45].max()
         if abs(l1 - l2) / l1 < 0.05 and curr['CLOSE'] > neck_w and curr['CLOSE'] > curr['OPEN']:
             signals.append("🇼 双底突破 (W-Bottom)")
+        h1 = recent_60['HIGH'].iloc[:30].max(); h2 = recent_60['HIGH'].iloc[30:].max()
+        neck_m = recent_60['LOW'].iloc[15:45].min()
+        if abs(h1 - h2) / h1 < 0.05 and curr['CLOSE'] < neck_m:
+            signals.append("🇲 双顶破位 (M-Top)")
         year_high = df['HIGH'].iloc[-250:].max()
         if curr['CLOSE'] > year_high * 0.95 and 60 < curr['RSI_14'] < 75:
             signals.append("☕ 杯柄形态突破")
     except: pass
 
-    bbu_col = 'BBU_20_2.0' if 'BBU_20_2.0' in df.columns else 'BBU_20_2'
-    bbl_col = 'BBL_20_2.0' if 'BBL_20_2.0' in df.columns else 'BBL_20_2'
-    if bbu_col in df.columns and bbl_col in df.columns and 'SMA_20' in df.columns:
-        try:
-            bw = (curr[bbu_col] - curr[bbl_col]) / curr['SMA_20']
-            min_bw_20 = ((df[bbu_col] - df[bbl_col]) / df['SMA_20']).iloc[-20:].min()
-            if bw <= min_bw_20 * 1.05: signals.append("🤐 布林收口 (变盘前夜)")
-        except: pass
-    
     if curr['LOW'] > prev['HIGH']: signals.append("🕳️ 向上跳空 (缺口不补)")
+    elif curr['HIGH'] < prev['LOW']: signals.append("🕳️ 向下跳空 (破位)")
 
     ma_list = [10, 20, 50, 100, 200]
     bounce_found = False
@@ -431,13 +515,13 @@ def analyze_daily_signals(ticker):
         if ma_col in df.columns:
             ma_val = curr[ma_col]
             if (curr['LOW'] <= ma_val * 1.015) and (curr['CLOSE'] > ma_val):
-                signals.append(f"回踩 MA{m} 获支撑")
+                signals.append(f"回踩 MA{m} 获支撑 ({ma_val:.2f})")
                 bounce_found = True
     if not bounce_found:
         if df['LOW'].iloc[-1] > df['LOW'].iloc[-2] > df['LOW'].iloc[-3]:
              if curr['CLOSE'] > curr['OPEN']: signals.append("趋势线支撑 (Higher Lows)")
-    
-    # 3. 九转/十三转
+
+    # 4. 九转/十三转
     try:
         work_df = df.iloc[-50:].copy()
         c = work_df['CLOSE'].values
@@ -452,21 +536,14 @@ def analyze_daily_signals(ticker):
         elif sell_setup == 13: signals.append("迪玛克十三转: 终极顶部 (13)")
     except: pass
 
-    # 4. 趋势
+    # 5. 趋势
     st_col = 'SUPERT_10_3.0' if 'SUPERT_10_3.0' in df.columns else 'SUPERT_10_3'
     if st_col in df.columns:
         if curr['CLOSE'] > curr[st_col]: signals.append("Supertrend 看多")
         else: signals.append("Supertrend 看空")
 
-    has_trend = False
     if 'ADX_14' in df.columns and curr['ADX_14'] > 20:
-        has_trend = True
         signals.append(f"ADX 趋势加速 ({curr['ADX_14']:.1f})")
-
-    if any(x in ["多头", "年线"] for x in signals) and not has_trend: pass 
-    else:
-        if (curr['SMA_5'] > curr['SMA_10'] > curr['SMA_20'] > curr['SMA_60']): signals.append("均线多头排列")
-        if (curr['SMA_5'] < curr['SMA_10'] < curr['SMA_20'] < curr['SMA_60']): signals.append("均线空头排列")
 
     if curr['CLOSE'] > curr['NX_BLUE_UP'] and curr['CLOSE'] > curr['NX_YELL_UP']:
         if prev['CLOSE'] < prev['NX_BLUE_UP']: signals.append("Nx 突破双梯")
@@ -474,12 +551,21 @@ def analyze_daily_signals(ticker):
     if curr['NX_BLUE_DW'] > curr['NX_YELL_UP']: signals.append("Nx 牛市排列")
     elif curr['NX_YELL_DW'] > curr['NX_BLUE_UP']: signals.append("Nx 熊市压制")
     
-    # 5. 摆动
-    if 'J_9_3' in df.columns:
-        if prev['J_9_3'] < 0 and curr['J_9_3'] > prev['J_9_3']: signals.append("J值反钩 (超跌反弹)")
-    
+    if 'P_FIB_R1' in df.columns and prev['CLOSE'] < curr['P_FIB_R1'] and curr['CLOSE'] > curr['P_FIB_R1']: signals.append("突破 R1 阻力")
+    if 'P_FIB_S1' in df.columns and prev['CLOSE'] > curr['P_FIB_S1'] and curr['CLOSE'] < curr['P_FIB_S1']: signals.append("跌破 S1 支撑")
+    if 'DCU_20_20' in df.columns and curr['CLOSE'] > prev['DCU_20_20']: signals.append("突破唐奇安上轨")
+    if 'DCL_20_20' in df.columns and curr['CLOSE'] < prev['DCL_20_20']: signals.append("跌破唐奇安下轨")
+
+    # 6. 摆动
+    if 'J_9_3' in df.columns and prev['J_9_3'] < 0 and curr['J_9_3'] > prev['J_9_3']: signals.append("J值反钩 (超跌反弹)")
     if curr['RSI_14'] > 75: signals.append(f"RSI 超买 ({curr['RSI_14']:.1f})")
     elif curr['RSI_14'] < 30: signals.append(f"RSI 超卖 ({curr['RSI_14']:.1f})")
+    if 'CCI_14_0.015' in df.columns:
+        if curr['CCI_14_0.015'] > 100: signals.append(f"CCI 超买 ({curr['CCI_14_0.015']:.0f})")
+        elif curr['CCI_14_0.015'] < -100: signals.append(f"CCI 超卖 ({curr['CCI_14_0.015']:.0f})")
+    if 'WILLR_14' in df.columns:
+        if curr['WILLR_14'] > -20: signals.append(f"WillR 超买 ({curr['WILLR_14']:.0f})")
+        elif curr['WILLR_14'] < -80: signals.append(f"WillR 超卖 ({curr['WILLR_14']:.0f})")
     
     return price, signals
 
@@ -487,16 +573,16 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V13.0 批量管理版Bot已启动: {bot.user}')
+    print(f'✅ V23.1 后台监控版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V13.0)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V23.1)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
-    embed.add_field(name="📋 监控", value="`/add [代码]` : 批量添加 (空格分隔)\n`/remove [代码]` : 删除自选\n`/list` : 查看列表", inline=False)
-    embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 批量分析", inline=False)
+    embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
+    embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
     embed.set_footer(text="FMP Ultimate API • 机构级多因子模型")
     await interaction.response.send_message(embed=embed)
 
@@ -506,10 +592,11 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
     await interaction.response.defer()
     stock_list = tickers.upper().replace(',', ' ').split()[:5]
     for ticker in stock_list:
+        start_time = time.time()
         try:
             price, signals = analyze_daily_signals(ticker)
             if price is None:
-                await interaction.followup.send(f"❌ 无法获取 {ticker} 数据")
+                await interaction.followup.send(f"❌ 无法获取 {ticker} 数据 (可能是代码错误或FMP无数据)")
                 continue
             if not signals: signals.append("趋势平稳，暂无异动")
             
@@ -518,23 +605,28 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
             
             embed = discord.Embed(title=f"{ticker} : {text_part}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
             embed.set_image(url=get_finviz_chart_url(ticker))
-            embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')}")
+            
+            ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
+            embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
             
             await interaction.followup.send(embed=embed)
+            
+            # 后台日志
+            elapsed = time.time() - start_time
+            print(f"📊 [ANALYSIS] {ticker}: Score={score} | Signals={len(signals)}/{TOTAL_CHECK_POINTS} | Time={elapsed:.2f}s")
+            
         except Exception as e:
             await interaction.followup.send(f"⚠️ 分析 {ticker} 时发生错误: {e}")
+            print(f"❌ [ERROR] {ticker}: {e}")
 
-# ⚠️ V13.0: 批量添加逻辑升级
-@bot.tree.command(name="add", description="批量添加个人监控")
-@app_commands.describe(ticker="输入股票代码，支持批量，空格分隔 (如: TSLA NVDA)")
+@bot.tree.command(name="add", description="添加个人监控")
 @app_commands.choices(mode=[app_commands.Choice(name="每日一次", value="once_daily"), app_commands.Choice(name="总是提醒", value="always")])
 async def add_stock(interaction: discord.Interaction, ticker: str, mode: str = "once_daily"):
+    ticker = ticker.upper()
     user_id = str(interaction.user.id)
     if user_id not in watch_data: watch_data[user_id] = {}
     
-    # 核心修改：支持空格分隔的批量输入
     stock_list = ticker.upper().replace(',', ' ').split()
-    
     if not stock_list:
         return await interaction.response.send_message("⚠️ 请输入有效的股票代码。")
 
@@ -585,6 +677,7 @@ async def daily_monitor():
         user_alerts = []
         for ticker, data in stocks.items():
             try:
+                start_time = time.time()
                 price, signals = analyze_daily_signals(ticker)
                 if signals:
                     score, desc_final = generate_report_content(signals)
@@ -600,6 +693,11 @@ async def daily_monitor():
                         embed.set_image(url=get_finviz_chart_url(ticker))
                         embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_now_str}")
                         user_alerts.append(embed)
+                        
+                        # 后台日志
+                        elapsed = time.time() - start_time
+                        print(f"📊 [MONITOR] {ticker}: Score={score} | Signals={len(signals)}/{TOTAL_CHECK_POINTS} | Time={elapsed:.2f}s")
+
             except Exception as e: print(f"Error {ticker}: {e}")
         if user_alerts:
             save_data()
