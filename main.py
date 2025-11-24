@@ -82,17 +82,17 @@ def get_signal_category_and_score(s):
 
 def generate_report_content(signals):
     """
-    V5.8 核心升级：
-    1. 计算总分
-    2. 分离 有效信号 和 去重信号
-    3. 去重信号打删除线，并永远排在最后
+    V5.9 视觉回归：
+    - 有效信号置顶
+    - 无效信号沉底
+    - 样式改回引用格式 (> 🔸)
     """
     items = []
     for s in signals:
         cat, score = get_signal_category_and_score(s)
         items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
-    # 标记有效性 (同类取最大)
+    # 标记有效性
     for item in items:
         if item['cat'] in ['volume', 'timing']:
             item['active'] = True
@@ -100,13 +100,12 @@ def generate_report_content(signals):
     for cat in ['trend', 'pattern', 'oscillator']:
         cat_items = [i for i in items if i['cat'] == cat]
         if cat_items:
-            # 取绝对值分最高的
             best = max(cat_items, key=lambda x: abs(x['score']))
             best['active'] = True
 
     total_score = 0
-    active_lines = []   # 存有效信号
-    inactive_lines = [] # 存去重信号
+    active_lines = []
+    inactive_lines = []
     
     for item in items:
         score_val = item['score']
@@ -114,17 +113,15 @@ def generate_report_content(signals):
         
         if item['active']:
             total_score += score_val
-            # 有效信号：加粗大标题
+            # 有效信号
             active_lines.append(f"### {item['raw']} ({score_str})")
         else:
             if score_val != 0:
-                # 无效信号：删除线 ~~文本~~，且不加标题格式
-                inactive_lines.append(f"~~{item['raw']} ({score_str})~~ [已去重]")
+                # 无效信号：改回引用样式
+                inactive_lines.append(f"> 🔸 {item['raw']} ({score_str}) [已去重]")
 
-    # 拼接：有效在前，无效在后
-    # 如果有去重项，中间可以加个空行或者分割线，这里直接换行即可
+    # 拼接
     all_lines = active_lines + inactive_lines
-    
     return total_score, "\n".join(all_lines)
 
 def format_dashboard_title(score):
@@ -271,13 +268,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V5.8 沉底排序版Bot已启动: {bot.user}')
+    print(f'✅ V5.9 视觉回归版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V5.8)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V5.9)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
