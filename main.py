@@ -48,12 +48,12 @@ def save_data():
 # ================= 🧠 战法说明书 =================
 def get_signal_advice(t):
     advice = ""
-    # 0. 💎 估值/事件
-    if "财报" in t: advice = "高危事件: 官方日历显示临近财报（T-5），波动率极高，建议回避。"
+    # 0. 💎 估值/事件 (新增 PS)
+    if "财报" in t: advice = "高危事件: 锁定未来7天内财报，不确定性极大，建议空仓观察！"
     elif "DCF 低估" in t: advice = "价值洼地: 价格低于未来现金流折现，具备长期安全边际。"
-    elif "DCF 高估" in t: advice = "价值透支: 价格远超内在价值，需警惕回归风险。"
     elif "PEG 低估" in t: advice = "成长价值: 业绩正增长且估值合理，优质GARP标的。"
-    elif "PEG 高估" in t: advice = "增长陷阱: 业绩增速撑不起当前的股价。"
+    elif "PS 低估" in t: advice = "营收低估: 对于亏损成长股，当前市销率极具吸引力。"
+    elif "PS 泡沫" in t: advice = "营收透支: 市销率过高，透支了未来多年的增长空间。"
     
     # 1. ⏳ 择时
     elif "九转" in t and "买入" in t: advice = "九转底部: 连跌9天，极度超跌，反弹一触即发。"
@@ -99,6 +99,9 @@ def get_signal_category_and_score(s):
     if "PEG" in s:
         if "低估" in s: return 'fundamental', 2
         if "高估" in s: return 'fundamental', -2
+    if "PS" in s: # 市销率
+        if "低估" in s: return 'fundamental', 2
+        if "泡沫" in s: return 'fundamental', -2
 
     # 1. ⏳ 择时
     if "九转" in s or "十三转" in s:
@@ -195,42 +198,36 @@ def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
-# V7.4: 采用官方日历接口 (Official Calendar Endpoint)
+# V7.5: 亏损股 PS 估值 + 范围财报锁
 def get_valuation_and_earnings(ticker, current_price):
     if not FMP_API_KEY: return []
     sigs = []
     try:
-        # 1. 📅 官方财报日历 (Historical/Upcoming)
-        # 文档: https://site.financialmodelingprep.com/developer/docs/earnings-calendar-api
-        # 逻辑: 取列表，解析日期，找最近的未来日期
-        cal_url = f"https://financialmodelingprep.com/api/v3/historical/earning_calendar/{ticker}?limit=10&apikey={FMP_API_KEY}"
+        # 1. 📅 财报范围扫雷 (Calendar Range)
+        # 逻辑：直接查全市场未来7天的财报，看Ticker是否在里面
+        today = datetime.date.today()
+        next_week = today + datetime.timedelta(days=7)
+        today_str = today.strftime('%Y-%m-%d')
+        next_week_str = next_week.strftime('%Y-%m-%d')
+        
+        # 使用范围接口，这是FMP最准的未来事件源
+        cal_url = f"https://financialmodelingprep.com/api/v3/earning_calendar?from={today_str}&to={next_week_str}&apikey={FMP_API_KEY}"
         cal_resp = requests.get(cal_url, timeout=5)
         
         if cal_resp.status_code == 200:
             cal_data = cal_resp.json()
-            if cal_data:
-                today = datetime.date.today()
-                # 遍历列表寻找未来日期
-                # 列表通常是降序排列，但为了保险，我们遍历查找 >= today 的最小日期
-                future_dates = []
-                for entry in cal_data:
+            # 在列表中寻找该股票
+            # 列表元素格式: {"date": "2025-11-25", "symbol": "NIO", ...}
+            for entry in cal_data:
+                if entry.get('symbol') == ticker:
                     date_str = entry.get('date')
                     if date_str:
-                        try:
-                            e_date = parser.parse(date_str).date()
-                            if e_date >= today:
-                                future_dates.append(e_date)
-                        except: pass
-                
-                if future_dates:
-                    # 找到离今天最近的未来日期
-                    next_date = min(future_dates)
-                    days_diff = (next_date - today).days
-                    if 0 <= days_diff <= 5:
+                        e_date = parser.parse(date_str).date()
+                        days_diff = (e_date - today).days
                         sigs.append(f"⚠️ 财报预警 (T-{days_diff}天)")
+                        break # 找到最近的一个即可
 
-        # 2. PEG & DCF 基础数据
-        # 获取 EPS 以清洗 PEG
+        # 2. 估值基础数据
         quote_url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={FMP_API_KEY}"
         quote_resp = requests.get(quote_url, timeout=5)
         eps = 0
@@ -238,7 +235,7 @@ def get_valuation_and_earnings(ticker, current_price):
             q_data = quote_resp.json()
             if q_data: eps = q_data[0].get('eps', 0)
 
-        # 获取 DCF
+        # DCF
         dcf_url = f"https://financialmodelingprep.com/api/v3/discounted-cash-flow/{ticker}?apikey={FMP_API_KEY}"
         dcf_resp = requests.get(dcf_url, timeout=5)
         if dcf_resp.status_code == 200:
@@ -249,17 +246,29 @@ def get_valuation_and_earnings(ticker, current_price):
                     if current_price < dcf * 0.8: sigs.append(f"💎 DCF 低估 (估值:${dcf:.1f})")
                     elif current_price > dcf * 1.5: sigs.append(f"💎 DCF 高估 (估值:${dcf:.1f})")
 
-        # 获取 PEG
+        # 3. PEG vs PS (智能切换)
         ratios_url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={FMP_API_KEY}"
         ratios_resp = requests.get(ratios_url, timeout=5)
         if ratios_resp.status_code == 200:
             r_data = ratios_resp.json()
-            if r_data and 'pegRatioTTM' in r_data[0]:
-                peg = r_data[0]['pegRatioTTM']
-                # 硬过滤：EPS必须为正，PEG才有效
-                if peg is not None and eps > 0:
-                    if 0 < peg < 1.0: sigs.append(f"💎 PEG 低估 ({peg:.2f})")
-                    elif peg > 2.0: sigs.append(f"💎 PEG 高估 ({peg:.2f})")
+            if r_data:
+                data = r_data[0]
+                
+                # 分支A: 盈利公司 -> 看 PEG
+                if eps > 0:
+                    peg = data.get('pegRatioTTM')
+                    if peg is not None:
+                        if 0 < peg < 1.0: sigs.append(f"💎 PEG 低估 ({peg:.2f})")
+                        elif peg > 2.0: sigs.append(f"💎 PEG 高估 ({peg:.2f})")
+                
+                # 分支B: 亏损公司 (NIO等) -> 看 PS (Price to Sales)
+                else:
+                    ps = data.get('priceToSalesRatioTTM')
+                    if ps is not None:
+                        # PS 估值标准 (通常 PS<1.5 为低估, PS>10 为泡沫)
+                        # 对于蔚来这种车企，PS 1.0 左右是很舒服的位置
+                        if ps < 1.5: sigs.append(f"💎 PS 低估 ({ps:.2f}x)")
+                        elif ps > 10: sigs.append(f"💎 PS 泡沫 ({ps:.2f}x)")
 
     except Exception as e:
         print(f"Valuation Error {ticker}: {e}")
@@ -276,7 +285,6 @@ def get_daily_data_stable(ticker):
         df = pd.DataFrame(hist_data)
         df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
         df = df.iloc[::-1].reset_index(drop=True)
-        
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         quote_resp = requests.get(quote_url, timeout=5)
         quote_data = quote_resp.json()
@@ -329,7 +337,7 @@ def analyze_daily_signals(ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
 
-    # --- 0. 估值/财报分析 (V7.4 修正版) ---
+    # --- 0. 估值/财报分析 (V7.5) ---
     val_sigs = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
@@ -394,13 +402,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V7.4 机构合规版Bot已启动: {bot.user}')
+    print(f'✅ V7.5 亏损股特供版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V7.4)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V7.5)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
