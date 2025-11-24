@@ -82,52 +82,50 @@ def get_signal_category_and_score(s):
 
 def generate_report_content(signals):
     """
-    V5.7 核心升级：生成带去重说明的详细报告，并计算总分
+    V5.8 核心升级：
+    1. 计算总分
+    2. 分离 有效信号 和 去重信号
+    3. 去重信号打删除线，并永远排在最后
     """
-    # 1. 解析所有信号
     items = []
     for s in signals:
         cat, score = get_signal_category_and_score(s)
         items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
-    # 2. 标记有效信号 (Active)
-    # 资金和择时：全部有效 (可叠加)
+    # 标记有效性 (同类取最大)
     for item in items:
         if item['cat'] in ['volume', 'timing']:
             item['active'] = True
 
-    # 结构、形态、摆动：同类取最大值 (Max Pooling)
     for cat in ['trend', 'pattern', 'oscillator']:
         cat_items = [i for i in items if i['cat'] == cat]
         if cat_items:
-            # 找到绝对值分最高的那个
+            # 取绝对值分最高的
             best = max(cat_items, key=lambda x: abs(x['score']))
-            # 标记为有效
-            # 注意：如果有多个同分，只取第一个作为有效，其他去重
             best['active'] = True
 
-    # 3. 计算总分 & 生成文本
     total_score = 0
-    lines = []
+    active_lines = []   # 存有效信号
+    inactive_lines = [] # 存去重信号
     
-    cat_names = {'trend': '趋势', 'pattern': '形态', 'oscillator': '摆动'}
-
     for item in items:
         score_val = item['score']
-        # 格式化分数：+3, -2
         score_str = f"+{score_val}" if score_val > 0 else f"{score_val}"
         
         if item['active']:
             total_score += score_val
-            # 有效信号：加粗标题显示
-            lines.append(f"### {item['raw']} ({score_str})")
+            # 有效信号：加粗大标题
+            active_lines.append(f"### {item['raw']} ({score_str})")
         else:
-            # 去重信号：使用引用格式 > 降级显示，并说明原因
-            reason = cat_names.get(item['cat'], '同类')
-            if score_val != 0: # 0分的不显示去重，没意义
-                lines.append(f"> 🔸 {item['raw']} ({score_str}) [已去重]")
+            if score_val != 0:
+                # 无效信号：删除线 ~~文本~~，且不加标题格式
+                inactive_lines.append(f"~~{item['raw']} ({score_str})~~ [已去重]")
 
-    return total_score, "\n".join(lines)
+    # 拼接：有效在前，无效在后
+    # 如果有去重项，中间可以加个空行或者分割线，这里直接换行即可
+    all_lines = active_lines + inactive_lines
+    
+    return total_score, "\n".join(all_lines)
 
 def format_dashboard_title(score):
     count = int(min(abs(score), 8))
@@ -140,7 +138,7 @@ def format_dashboard_title(score):
     elif score <= -4: status, color = "极度高危", discord.Color.green()
     elif score <= -1: status, color = "趋势看空", discord.Color.dark_teal()
     else: status, color = "震荡整理", discord.Color.gold()
-    # 标题分数也带加号
+    
     score_title = f"+{score}" if score > 0 else f"{score}"
     return f"{status} ({score_title}) {icons}", color
 
@@ -273,13 +271,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V5.7 机构可视化版Bot已启动: {bot.user}')
+    print(f'✅ V5.8 沉底排序版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V5.7)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V5.8)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
@@ -297,14 +295,12 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
             continue
         if not signals: signals.append("趋势平稳，暂无异动")
         
-        # 使用新的生成函数获取总分和文本
         score, desc_final = generate_report_content(signals)
         text_part, color = format_dashboard_title(score)
         
         embed = discord.Embed(title=f"{ticker} : {text_part}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
         embed.set_image(url=get_finviz_chart_url(ticker))
         
-        # 动态页脚时间
         ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
         embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
         
@@ -355,7 +351,6 @@ async def daily_monitor():
     today = datetime.datetime.now().strftime('%Y-%m-%d')
     print(f"🔎 启动收盘扫描: {today} (美东 16:01)")
     
-    # 动态获取纽约时间用于页脚
     ny_now_str = datetime.datetime.now(ny_tz).strftime('%H:%M')
 
     for user_id, stocks in watch_data.items():
@@ -364,13 +359,10 @@ async def daily_monitor():
             try:
                 price, signals = analyze_daily_signals(ticker)
                 if signals:
-                    # 获取去重后的分数和文本
                     score, desc_final = generate_report_content(signals)
-                    
                     should_alert = False
                     mode = data['mode']
                     if mode == 'always': should_alert = True
-                    is_lv4 = abs(score) >= 4 # 简单判定：总分超过4分为高危/极强
                     if mode == 'once_daily' and data.get('last_alert_date') != today: should_alert = True
                     
                     if should_alert:
