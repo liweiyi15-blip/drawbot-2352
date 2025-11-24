@@ -44,30 +44,24 @@ def save_data():
         with open(DATA_FILE, 'w') as f: json.dump(watch_data, f, indent=4)
     except Exception as e: print(f"❌ 保存失败: {e}")
 
-# ================= 🧠 战法说明书 (V6.0 回归) =================
+# ================= 🧠 战法说明书 =================
 def get_signal_advice(t):
-    """
-    根据信号关键词返回战法说明
-    """
     advice = ""
     # 1. ⏳ 择时
     if "九转" in t and "买入" in t: advice = "九转底部: 连跌9天，极度超跌，反弹一触即发。"
     elif "九转" in t and "卖出" in t: advice = "九转顶部: 连涨9天，情绪过热，建议分批止盈。"
     elif "十三转" in t and "底部" in t: advice = "终极底部: 趋势衰竭的极值，左侧交易皇冠上的明珠。"
     elif "十三转" in t and "顶部" in t: advice = "终极顶部: 趋势高潮的极值，风险极大，必须清仓。"
-    
     # 2. 💰 资金
     elif "盘中爆量" in t: advice = "主力异动: 日内大资金突袭，方向可信度极高。"
     elif "放量" in t: advice = "量价配合: 上涨有真金白银支持，趋势健康。"
     elif "缩量" in t: advice = "洗盘迹象: 交易清淡，卖盘枯竭，关注变盘。"
-    
     # 3. 🕯️ 形态
     elif "早晨" in t: advice = "黎明曙光: 经典底部反转形态，多头吹响号角。"
     elif "黄昏" in t: advice = "夜幕降临: 经典顶部反转形态，空头开始反击。"
     elif "吞没" in t or "阳包阴" in t or "阴包阳" in t: advice = "反包形态: 一举吃掉昨日K线，力量对比发生逆转。"
     elif "锤子" in t: advice = "金针探底: 下方支撑强劲，多头抵抗激烈。"
     elif "断头" in t: advice = "一刀切: 大阴线切断多条均线，趋势破坏。"
-    
     # 4. 📈 趋势
     elif "多头排列" in t: advice = "最强趋势: 均线全线发散向上，持股待涨。"
     elif "空头排列" in t: advice = "最弱趋势: 均线全线发散向下，空仓观望。"
@@ -77,7 +71,6 @@ def get_signal_advice(t):
     elif "Nx 站稳" in t: advice = "Nx持股: 价格运行在蓝梯之上，趋势完好。"
     elif "Nx 跌破" in t: advice = "Nx离场: 跌破短期生命线，注意风险。"
     elif "R1" in t or "S1" in t: advice = "关键位: 斐波那契重要阻力/支撑测试。"
-    
     # 5. 🌊 摆动
     elif "背离" in t: advice = "先行指标: 价格与指标背道而驰，原有趋势即将终结。"
     elif "金叉" in t: advice = "动能增强: 买方力量占据上风。"
@@ -85,7 +78,6 @@ def get_signal_advice(t):
     elif "布林" in t: advice = "变盘节点: 突破波动率轨道，行情加速。"
     elif "超买" in t: advice = "情绪过热: 获利盘随时可能兑现。"
     elif "超卖" in t: advice = "情绪冰点: 恐慌盘杀出，关注反弹。"
-    
     return advice
 
 # ================= ⚖️ 评分系统 =================
@@ -126,7 +118,7 @@ def get_signal_category_and_score(s):
 
 def generate_report_content(signals):
     """
-    V6.0: 计算总分 + 去重排序 + 💡添加战法说明
+    V6.1: 移除灯泡 + 强制物理隔离
     """
     items = []
     for s in signals:
@@ -145,7 +137,7 @@ def generate_report_content(signals):
             best['active'] = True
 
     total_score = 0
-    active_lines = []
+    active_blocks = []  # 使用块存储，方便控制间距
     inactive_lines = []
     
     for item in items:
@@ -154,19 +146,27 @@ def generate_report_content(signals):
         
         if item['active']:
             total_score += score_val
-            # 1. 有效信号标题
-            active_lines.append(f"### {item['raw']} ({score_str})")
-            # 2. 获取并添加说明 (仅有效信号显示说明)
+            # 构建一个完整的有效信号块
+            block = f"### {item['raw']} ({score_str})"
             advice = get_signal_advice(item['raw'])
             if advice:
-                active_lines.append(f"> 💡 {advice}")
+                # 引用说明，无emoji
+                block += f"\n> {advice}"
+            active_blocks.append(block)
         else:
             if score_val != 0:
-                # 无效信号沉底，不显示说明，保持整洁
                 inactive_lines.append(f"> 🔸 {item['raw']} ({score_str}) [已去重]")
 
-    all_lines = active_lines + inactive_lines
-    return total_score, "\n".join(all_lines)
+    # 1. 有效信号部分
+    # 每个块之间加个换行，保持呼吸感
+    final_text = "\n".join(active_blocks)
+    
+    # 2. 物理隔离带 + 去重部分
+    if inactive_lines:
+        # \n\n 强制打断引用块，防止去重列表和上面的说明粘连
+        final_text += "\n\n" + "\n".join(inactive_lines)
+
+    return total_score, final_text
 
 def format_dashboard_title(score):
     count = int(min(abs(score), 8))
@@ -312,13 +312,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V6.0 完整体Bot已启动: {bot.user}')
+    print(f'✅ V6.1 视觉修正版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V6.0)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V6.1)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
