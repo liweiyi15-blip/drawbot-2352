@@ -44,70 +44,95 @@ def save_data():
         with open(DATA_FILE, 'w') as f: json.dump(watch_data, f, indent=4)
     except Exception as e: print(f"❌ 保存失败: {e}")
 
-# ================= 🧠 战法说明书 =================
+# ================= 🧠 战法说明书 (V12.1 人话修正版) =================
 def get_signal_advice(t):
     advice = ""
-    # 0. 风险/估值
-    if "财报高危" in t: advice = "风控熔断: 3日内发布财报，基本面因子已失效，严禁赌博！"
-    elif "财报预警" in t: advice = "事件驱动: 临近财报窗口，波动率将放大，注意仓位管理。"
-    elif "历史低位" in t: advice = "均值回归: 估值处于3年历史底部，赔率极佳的左侧买点。"
-    elif "DCF 低估" in t: advice = "绝对价值: 价格低于现金流折现，安全边际充足。"
-    elif "PEG 低估" in t: advice = "成长价值: 高增长完美消化了估值，机构最爱的GARP策略。"
     
-    # 1. 机构/资金
-    elif "VWAP 站上" in t: advice = "机构控盘: 价格站上成交量加权均价，日内多头主导。"
-    elif "VWAP 跌破" in t: advice = "机构出货: 价格跌破成交量加权均价，日内空头主导。"
-    elif "三线打击" in t: advice = "暴力洗盘: 大阳线一举吞没三日跌幅，极其罕见的强力反转。"
-    elif "爆量" in t: advice = "主力进场: 15分钟级别巨量异动，非散户所为。"
+    # --- 0. 估值/事件 (中性/提示类) ---
+    if "财报" in t: advice = "高危预警: 马上要发财报了，如果你不想赌博，最好先避一避。"
+    # 历史估值
+    elif "历史低位" in t: advice = "黄金坑: 现在的估值比过去3年都要便宜，均值回归动力强。"
+    elif "历史高位" in t: advice = "估值贵了: 比过去3年都要贵，需要极强的业绩增长才能撑住股价。"
+    # 绝对估值
+    elif "DCF 低估" in t: advice = "打折促销: 股价低于未来现金流折现，买得便宜就是硬道理。"
+    elif "DCF 溢价" in t: advice = "透支未来: 现在的价格已经把未来的好消息都涨完了。"
+    elif "PEG 低估" in t: advice = "高增长低估值: 业绩跑得比股价快，性价比极高。"
+    elif "PEG 溢价" in t: advice = "股价跑太快: 业绩增速有点跟不上股价涨幅了。"
+    elif "PS 低估" in t: advice = "营收被低估: 对于不赚钱的公司，这个市销率很有吸引力。"
+    elif "PS 溢价" in t: advice = "营收跟不上: 相比于销售额，股价太贵了。"
+    elif "PE 低估" in t: advice = "便宜货: 传统市盈率处于低位区。"
+    elif "PE 溢价" in t: advice = "高价货: 传统市盈率处于高位区。"
     
-    # 2. 形态
-    elif "三角旗" in t: advice = "空中加油: 缩量整理结束，放量突破，趋势加速信号。"
-    elif "双底" in t: advice = "结构反转: 两次探底确认支撑，颈线突破确认升势。"
-    elif "杯柄" in t: advice = "大牛启动: 经历了漫长的圆弧底和洗盘，主升浪开启。"
-    elif "回踩" in t: advice = "黄金坑: 缩量回踩关键均线不破，最佳的上车机会。"
-    elif "布林收口" in t: advice = "变盘前夜: 波动率压缩至极致，即将选择方向。"
-    elif "跳空" in t: advice = "主力脚印: 机构资金强势抢筹(或出逃)留下的缺口。"
+    # --- 1. 趋势 (Supertrend 修正) ---
+    elif "Supertrend 看多" in t: advice = "趋势向上: 价格站稳止损线，只要不破就一直持有。"
+    elif "Supertrend 看空" in t: advice = "趋势向下: 价格跌破止损线，趋势坏了，建议离场。"
+    elif "多头" in t: advice = "最强多头: 均线发散向上，所有人都赚钱，顺势而为。"
+    elif "空头" in t: advice = "最弱空头: 均线发散向下，谁买谁套，观望为主。"
+    elif "Nx 牛市" in t: advice = "上升通道: 价格在通道上层运行，典型的牛市特征。"
+    elif "Nx 熊市" in t: advice = "下降通道: 价格被通道压制，每次反弹都是逃命机会。"
+    elif "Nx" in t: advice = "通道震荡: 关注通道上下沿的突破情况。"
+    elif "ADX" in t: advice = "加速赶顶/底: 趋势正在加速，行情进入高潮阶段。"
+
+    # --- 2. 形态/支撑 ---
+    elif "三角旗" in t: advice = "空中加油: 涨了一波后休息结束，又要开始拉升了。"
+    elif "回踩" in t: advice = "倒车接人: 缩量回调到均线没跌破，这是最稳的上车点。"
+    elif "双底" in t: advice = "双重底: 两次探底成功，空头砸不下去了，反转开始。"
+    elif "双顶" in t: advice = "双重顶: 两次冲高失败，多头没力气了，顶部确立。"
+    elif "杯柄" in t: advice = "大牛启动: 经典的杯柄形态，洗盘非常充分，主升浪信号。"
+    elif "三线打击" in t: advice = "绝地反击: 一根大阳线吃掉三根阴线，极其罕见的暴力反转。"
+    elif "趋势线" in t: advice = "趋势护盘: 每次跌到趋势线就有人买，多头防守严密。"
+    elif "早晨" in t or "锤子" in t: advice = "止跌信号: 底部出现多头抵抗，跌不动了。"
+    elif "黄昏" in t or "断头" in t: advice = "见顶信号: 顶部出现空头砸盘，快跑。"
+    elif "吞没" in t or "包" in t: advice = "反向吞没: 力量对比瞬间逆转，变盘信号。"
+    elif "跳空" in t: advice = "缺口不补: 机构资金暴力抢筹(或出逃)，动能极强。"
+    elif "布林收口" in t: advice = "暴风雨前夜: 波动极小，马上要出大方向了，盯紧！"
+
+    # --- 3. 择时/资金 ---
+    elif "九转" in t and "买" in t: advice = "超跌反弹: 连跌9天，物极必反，博个短线反弹。"
+    elif "九转" in t and "卖" in t: advice = "超买回调: 连涨9天，获利盘太多，小心回调。"
+    elif "十三转" in t: advice = "趋势终结: 这一波行情可能走到头了。"
+    elif "爆量" in t: advice = "主力进出: 成交量异常放大，非散户行为，必有大事。"
+    elif "放量" in t: advice = "量价齐升: 越涨越有人买，健康的上涨。"
+    elif "缩量" in t: advice = "量价背离/洗盘: 关注变盘方向。"
+    elif "VWAP 站上" in t: advice = "日内强势: 价格在机构成本线之上，多头控盘。"
+    elif "VWAP 跌破" in t: advice = "日内弱势: 价格在机构成本线之下，空头控盘。"
     
-    # 3. 趋势/择时
-    elif "Supertrend" in t: advice = "趋势雷达: 突破ATR波动率止损线，右侧最稳健信号。"
-    elif "九转" in t and "买" in t: advice = "物极必反: 连跌9天，动能衰竭，博弈超跌反弹。"
-    elif "Nx 牛市" in t: advice = "上升通道: 价格沿通道上行，趋势健康。"
-    elif "ADX" in t: advice = "趋势加速: 趋势强度指标走高，单边行情开启。"
+    # --- 4. 摆动 ---
+    elif "背离" in t: advice = "后劲不足: 价格创新高但指标没跟上，小心诱多。"
+    elif "反钩" in t: advice = "短线金叉: 超跌后的快速反弹信号。"
+    elif "超买" in t: advice = "太热了: 这种位置不要追高，容易站岗。"
+    elif "超卖" in t: advice = "太冷了: 这种位置不要杀跌，容易卖在地板。"
 
     return advice
 
 # ================= ⚖️ 评分系统 =================
-def get_signal_category_and_score(s, earnings_days_diff):
+def get_signal_category_and_score(s):
     s = s.strip()
     
-    # --- 🔥 熔断机制 ---
-    valuation_weight = 1
-    if earnings_days_diff is not None and 0 <= earnings_days_diff <= 3:
-        valuation_weight = 0
+    # 0. 估值/事件 (0分项)
+    if "财报" in s: return 'fundamental', 0 
+    if "历史高位" in s: return 'fundamental', 0 
+    if "溢价" in s: return 'fundamental', 0 # 只要带溢价两字，都是0分提示
     
-    # 0. 估值 (受熔断控制)
-    if "财报高危" in s: return 'fundamental', 0 
-    if "财报预警" in s: return 'fundamental', 0
-    
-    if "历史低位" in s: return 'fundamental', 3 * valuation_weight
-    if "DCF" in s: return 'fundamental', (2 if "低估" in s else 0) * valuation_weight
-    if "PEG" in s: return 'fundamental', (2 if "低估" in s else 0) * valuation_weight
-    if "PS" in s: return 'fundamental', (2 if "低估" in s else 0) * valuation_weight
-    if "PE" in s: return 'fundamental', (2 if "低估" in s else 0) * valuation_weight
+    # 估值加分项
+    if "历史低位" in s: return 'fundamental', 3 
+    if "低估" in s: return 'fundamental', 2
 
-    # 1. 机构/形态
+    # 1. 形态/支撑 (高权重)
     if "三线打击" in s: return 'pattern', 5
-    if "VWAP" in s: return 'volume', 2 if "站上" in s else -2
     if "双底" in s or "杯柄" in s or "三角旗突破" in s: return 'pattern', 4
     if "双顶" in s or "三角旗跌破" in s: return 'pattern', -4
     if "回踩" in s or "趋势线" in s or "布林收口" in s: return 'pattern', 3
     if "跳空" in s: return 'pattern', 3 if "上" in s else -3
+    if any(x in s for x in ["早晨", "阳包阴", "锤子"]): return 'pattern', 4
+    if any(x in s for x in ["断头", "阴包阳", "射击", "黄昏", "墓碑"]): return 'pattern', -4
 
     # 2. 择时
     if "九转" in s or "十三转" in s:
         return 'timing', 4 if ("买入" in s or "底部" in s) else -4
         
     # 3. 资金
+    if "VWAP" in s: return 'volume', 2 if "站上" in s else -2
     if "盘中爆量" in s: return 'volume', 4 if "抢筹" in s else -4
     if "放量" in s: return 'volume', 3 if "大涨" in s else -3
     if "缩量" in s: return 'volume', 1 if "回调" in s else -1
@@ -130,10 +155,10 @@ def get_signal_category_and_score(s, earnings_days_diff):
     
     return 'other', 0
 
-def generate_report_content(signals, earnings_days_diff):
+def generate_report_content(signals):
     items = []
     for s in signals:
-        cat, score = get_signal_category_and_score(s, earnings_days_diff)
+        cat, score = get_signal_category_and_score(s)
         items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
     for item in items:
@@ -147,9 +172,10 @@ def generate_report_content(signals, earnings_days_diff):
             best['active'] = True
 
     total_score = 0
-    earnings_blocks = [] 
-    active_list = []     
-    inactive_lines = []  
+    earnings_blocks = [] # 财报 (置顶)
+    signal_blocks = []   # 信号 (带分)
+    info_blocks = []     # 提示 (0分)
+    inactive_lines = []  # 去重
     
     for item in items:
         score_val = item['score']
@@ -157,23 +183,46 @@ def generate_report_content(signals, earnings_days_diff):
         
         if item['active']:
             total_score += score_val
-            block = f"### {item['raw']} ({score_str})"
             advice = get_signal_advice(item['raw'])
-            if advice: block += f"\n> {advice}"
             
+            # 1. 财报 (特殊处理)
             if "财报" in item['raw']:
                 icon = "### 🚨 " if "高危" in item['raw'] else "### ⚠️ "
-                block = block.replace("### ", icon)
+                block = f"{icon}{item['raw']}"
+                if advice: block += f"\n> {advice}"
                 earnings_blocks.append(block)
+            
+            # 2. 0分提示 (估值溢价等) -> 放入 Info 区
+            elif score_val == 0:
+                # 使用 ℹ️ 图标，不显示分数 (0)
+                block = f"**ℹ️ {item['raw']}**" 
+                if advice: block += f"\n> {advice}"
+                info_blocks.append(block)
+                
+            # 3. 有效信号 (带分) -> 放入 Signal 区
             else:
-                active_list.append({'block': block, 'score': score_val})
+                block = f"### {item['raw']} ({score_str})"
+                if advice: block += f"\n> {advice}"
+                signal_blocks.append({'block': block, 'score': score_val})
         else:
             if score_val != 0:
                 inactive_lines.append(f"🔸 {item['raw']} ({score_str}) [已去重]")
 
-    active_list.sort(key=lambda x: x['score'], reverse=True)
-    final_blocks = earnings_blocks + [x['block'] for x in active_list]
-    final_text = "\n".join(final_blocks)
+    # 排序：信号区按绝对值降序
+    signal_blocks.sort(key=lambda x: abs(x['score']), reverse=True)
+    
+    # 最终组装：财报 -> 信号 -> 提示 -> 去重
+    final_list = []
+    final_list.extend(earnings_blocks)
+    final_list.extend([x['block'] for x in signal_blocks])
+    
+    # 如果有提示信息，加个空行隔开
+    if info_blocks:
+        final_list.append("") # 空行
+        final_list.extend(info_blocks)
+        
+    final_text = "\n".join(final_list)
+    
     if inactive_lines: 
         final_text += "\n\n" + "\n".join(inactive_lines)
         
@@ -198,9 +247,8 @@ def get_finviz_chart_url(ticker):
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
 def get_valuation_and_earnings(ticker, current_price):
-    if not FMP_API_KEY: return [], None 
+    if not FMP_API_KEY: return []
     sigs = []
-    days_to_earnings = None
     
     try:
         # 1. 📅 财报
@@ -216,11 +264,7 @@ def get_valuation_and_earnings(ticker, current_price):
                     d_str = entry.get('date')
                     if d_str:
                         diff = (parser.parse(d_str).date() - today).days
-                        days_to_earnings = diff
-                        if 0 <= diff <= 3: 
-                            sigs.append(f"财报高危 (T-{diff}天) (估值失效)")
-                        elif 3 < diff <= 14: 
-                            sigs.append(f"财报预警 (T-{diff}天)")
+                        if 0 <= diff <= 14: sigs.append(f"财报预警 (T-{diff}天)")
                         break 
 
         # 2. 估值
@@ -274,7 +318,7 @@ def get_valuation_and_earnings(ticker, current_price):
                     elif current_price > dcf * 2.0: sigs.append(f"DCF 溢价 (${dcf:.1f})")
 
     except: pass
-    return sigs, days_to_earnings
+    return sigs
 
 def get_daily_data_stable(ticker):
     if not FMP_API_KEY: return None
@@ -311,10 +355,9 @@ def get_daily_data_stable(ticker):
 
 def analyze_daily_signals(ticker):
     df = get_daily_data_stable(ticker)
-    if df is None or len(df) < 250: return None, None, None
+    if df is None or len(df) < 250: return None, None
     signals = []
     
-    # 计算指标
     df['nx_blue_up'] = df['high'].ewm(span=24, adjust=False).mean()
     df['nx_blue_dw'] = df['low'].ewm(span=23, adjust=False).mean()
     df['nx_yell_up'] = df['high'].ewm(span=89, adjust=False).mean()
@@ -324,19 +367,16 @@ def analyze_daily_signals(ticker):
     df.ta.bbands(length=20, std=2, append=True)
     df.ta.macd(fast=12, slow=26, signal=9, append=True)
     df.ta.rsi(length=14, append=True)
-    try: df.ta.supertrend(length=10, multiplier=3, append=True)
-    except: pass
     try: df.ta.kdj(length=9, signal=3, append=True)
     except: pass
-    try: df.ta.adx(length=14, append=True)
-    except: pass
-    try: df.ta.vwap(append=True)
-    except: pass
-    
     df.ta.willr(length=14, append=True); df.ta.cci(length=20, append=True)
-    df.ta.obv(append=True)
+    df.ta.adx(length=14, append=True); df.ta.obv(append=True)
     df.ta.atr(length=14, append=True); df.ta.donchian(lower_length=20, upper_length=20, append=True)
     try: df.ta.pivots(type="fibonacci", append=True)
+    except: pass
+    try: df.ta.supertrend(length=10, multiplier=3, append=True)
+    except: pass
+    try: df.ta.vwap(append=True)
     except: pass
     
     df['VOL_MA_20'] = df.ta.sma(close='volume', length=20)
@@ -345,8 +385,8 @@ def analyze_daily_signals(ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
 
-    # 0. 估值 & 熔断
-    val_sigs, days_to_earnings = get_valuation_and_earnings(ticker, price)
+    # 0. 估值
+    val_sigs = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
     # 1. 机构/资金
@@ -367,6 +407,10 @@ def analyze_daily_signals(ticker):
     if ret_20 > 0.10 and curr['CLOSE'] > high_10 and curr['VOLUME'] > vol_ma * 1.5:
         signals.append("🏴 三角旗形突破")
     
+    low_10 = df['LOW'].iloc[-11:-1].min()
+    if ret_20 < -0.10 and curr['CLOSE'] < low_10 and curr['VOLUME'] > vol_ma * 1.5:
+        signals.append("🏴 三角旗形跌破")
+
     if (df['CLOSE'].iloc[-2] < df['OPEN'].iloc[-2]) and \
        (df['CLOSE'].iloc[-3] < df['OPEN'].iloc[-3]) and \
        (df['CLOSE'].iloc[-4] < df['OPEN'].iloc[-4]) and \
@@ -382,15 +426,18 @@ def analyze_daily_signals(ticker):
         neck_w = recent_60['HIGH'].iloc[15:45].max()
         if abs(l1 - l2) / l1 < 0.05 and curr['CLOSE'] > neck_w and curr['CLOSE'] > curr['OPEN']:
             signals.append("🇼 双底突破 (W-Bottom)")
+        h1 = recent_60['HIGH'].iloc[:30].max()
+        h2 = recent_60['HIGH'].iloc[30:].max()
+        neck_m = recent_60['LOW'].iloc[15:45].min()
+        if abs(h1 - h2) / h1 < 0.05 and curr['CLOSE'] < neck_m:
+            signals.append("🇲 双顶破位 (M-Top)")
         year_high = df['HIGH'].iloc[-250:].max()
         if curr['CLOSE'] > year_high * 0.95 and 60 < curr['RSI_14'] < 75:
             signals.append("☕ 杯柄形态突破")
     except: pass
 
-    # ⚠️ V17.1 修复：动态获取布林带列名
     bbu_col = 'BBU_20_2.0' if 'BBU_20_2.0' in df.columns else 'BBU_20_2'
     bbl_col = 'BBL_20_2.0' if 'BBL_20_2.0' in df.columns else 'BBL_20_2'
-    
     if bbu_col in df.columns and bbl_col in df.columns and 'SMA_20' in df.columns:
         try:
             bw = (curr[bbu_col] - curr[bbl_col]) / curr['SMA_20']
@@ -429,7 +476,6 @@ def analyze_daily_signals(ticker):
     except: pass
 
     # 4. 趋势
-    # ⚠️ V17.1 修复：动态获取 Supertrend 列名
     st_col = 'SUPERT_10_3.0' if 'SUPERT_10_3.0' in df.columns else 'SUPERT_10_3'
     if st_col in df.columns:
         if curr['CLOSE'] > curr[st_col]: signals.append("Supertrend 看多")
@@ -458,19 +504,19 @@ def analyze_daily_signals(ticker):
     if curr['RSI_14'] > 75: signals.append(f"RSI 超买 ({curr['RSI_14']:.1f})")
     elif curr['RSI_14'] < 30: signals.append(f"RSI 超卖 ({curr['RSI_14']:.1f})")
     
-    return price, signals, days_to_earnings
+    return price, signals
 
 # ================= Bot 指令集 =================
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V17.1 鲁棒防崩版Bot已启动: {bot.user}')
+    print(f'✅ V12.1 完美交互版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V17.1)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V12.1)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
@@ -483,13 +529,13 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
     stock_list = tickers.upper().replace(',', ' ').split()[:5]
     for ticker in stock_list:
         try:
-            price, signals, earnings_diff = analyze_daily_signals(ticker)
+            price, signals = analyze_daily_signals(ticker)
             if price is None:
                 await interaction.followup.send(f"❌ 无法获取 {ticker} 数据")
                 continue
             if not signals: signals.append("趋势平稳，暂无异动")
             
-            score, desc_final = generate_report_content(signals, earnings_diff)
+            score, desc_final = generate_report_content(signals)
             text_part, color = format_dashboard_title(score)
             
             embed = discord.Embed(title=f"{ticker} : {text_part}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
@@ -553,9 +599,9 @@ async def daily_monitor():
         user_alerts = []
         for ticker, data in stocks.items():
             try:
-                price, signals, earnings_diff = analyze_daily_signals(ticker)
+                price, signals = analyze_daily_signals(ticker)
                 if signals:
-                    score, desc_final = generate_report_content(signals, earnings_diff)
+                    score, desc_final = generate_report_content(signals)
                     should_alert = False
                     mode = data['mode']
                     if mode == 'always': should_alert = True
