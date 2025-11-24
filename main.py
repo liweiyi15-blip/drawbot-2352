@@ -135,7 +135,6 @@ def generate_report_content(signals):
             active_blocks.append(block)
         else:
             if score_val != 0:
-                # 去掉 > 符号，直接用 🔸
                 inactive_lines.append(f"🔸 {item['raw']} ({score_str}) [已去重]")
 
     final_text = "\n".join(active_blocks)
@@ -160,46 +159,44 @@ def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
-# V8.3: 移除所有 Headers，回归原始调用
+# V8.6: 强制 Stable 节点
 def get_valuation_and_earnings(ticker, current_price):
     if not FMP_API_KEY: return [], "Key Missing"
     sigs = []
     debug_log = {} 
     
-    # ❌ 移除 Headers，防止被 FMP 防火墙拦截
-    
     try:
-        # 1. 📅 财报日历 (Range)
+        # 1. 📅 财报日历 (Stable Endpoint)
         today = datetime.date.today()
         future_str = (today + datetime.timedelta(days=14)).strftime('%Y-%m-%d')
         today_str = today.strftime('%Y-%m-%d')
         
-        cal_url = f"https://financialmodelingprep.com/api/v3/earning_calendar?from={today_str}&to={future_str}&apikey={FMP_API_KEY}"
+        # ⚠️ 注意: Stable 接口是 earnings-calendar (复数)
+        cal_url = f"https://financialmodelingprep.com/stable/earnings-calendar?from={today_str}&to={future_str}&apikey={FMP_API_KEY}"
         cal_resp = requests.get(cal_url, timeout=10)
         
-        debug_log['Cal_Stat'] = cal_resp.status_code
+        debug_log['Cal'] = cal_resp.status_code
         
         if cal_resp.status_code == 200:
             cal_data = cal_resp.json()
-            
             for entry in cal_data:
                 sym = entry.get('symbol', '')
-                # 只要 Symbol 包含 ticker 字符串 (NIO in NIO)
                 if ticker == sym or sym == f"{ticker}.US":
                     d_str = entry.get('date')
                     if d_str:
                         e_date = parser.parse(d_str).date()
                         diff = (e_date - today).days
-                        debug_log['NextEarn'] = f"{d_str}({diff}d)"
+                        debug_log['NextE'] = f"{d_str}({diff})"
                         if 0 <= diff <= 14: 
                             sigs.append(f"⚠️ 财报预警 (T-{diff}天)")
                         break 
 
-        # 2. 💎 估值 (Ratios TTM)
-        r_url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={FMP_API_KEY}"
+        # 2. 💎 估值 (Stable Ratios TTM)
+        # ⚠️ 注意: Stable 接口使用 query param: ?symbol=AAPL
+        r_url = f"https://financialmodelingprep.com/stable/ratios-ttm?symbol={ticker}&apikey={FMP_API_KEY}"
         r_resp = requests.get(r_url, timeout=10)
         
-        debug_log['Rat_Stat'] = r_resp.status_code
+        debug_log['Rat'] = r_resp.status_code
         
         if r_resp.status_code == 200:
             r_data = r_resp.json()
@@ -212,13 +209,11 @@ def get_valuation_and_earnings(ticker, current_price):
                 
                 debug_log['PEG'] = peg
                 debug_log['PS'] = ps
-                debug_log['PE'] = pe
                 
                 if eps_ttm > 0:
                     if peg is not None:
                         if 0 < peg < 1.2: sigs.append(f"💎 PEG 低估 ({peg:.2f})")
                         elif peg > 2.5: sigs.append(f"💎 PEG 高估 ({peg:.2f})")
-                    
                     if pe is not None:
                         if 0 < pe < 20: sigs.append(f"💎 PE 低估 ({pe:.1f}x)")
                         elif pe > 60: sigs.append(f"💎 PE 泡沫 ({pe:.1f}x)")
@@ -227,23 +222,24 @@ def get_valuation_and_earnings(ticker, current_price):
                         if ps < 2.0: sigs.append(f"💎 PS 低估 ({ps:.2f}x)")
                         elif ps > 12: sigs.append(f"💎 PS 泡沫 ({ps:.2f}x)")
 
-        # 3. DCF
-        d_url = f"https://financialmodelingprep.com/api/v3/discounted-cash-flow/{ticker}?apikey={FMP_API_KEY}"
+        # 3. DCF (Stable DCF)
+        # ⚠️ 注意: Stable 接口使用 query param
+        d_url = f"https://financialmodelingprep.com/stable/discounted-cash-flow?symbol={ticker}&apikey={FMP_API_KEY}"
         d_resp = requests.get(d_url, timeout=10)
         
-        debug_log['DCF_Stat'] = d_resp.status_code
+        debug_log['DCF'] = d_resp.status_code
         
         if d_resp.status_code == 200:
             d_data = d_resp.json()
-            if d_data and 'dcf' in d_data[0]:
+            if d_data and len(d_data) > 0 and 'dcf' in d_data[0]:
                 dcf = d_data[0]['dcf']
-                debug_log['DCF_Val'] = dcf
+                debug_log['Val'] = dcf
                 if dcf > 0:
                     if current_price < dcf * 0.85: sigs.append(f"💎 DCF 低估 (${dcf:.1f})")
                     elif current_price > dcf * 1.4: sigs.append(f"💎 DCF 高估 (${dcf:.1f})")
 
     except Exception as e:
-        debug_log['Error'] = str(e)
+        debug_log['Err'] = str(e)
         
     debug_str = " | ".join([f"{k}:{v}" for k,v in debug_log.items()])
     return sigs, debug_str
@@ -251,6 +247,7 @@ def get_valuation_and_earnings(ticker, current_price):
 def get_daily_data_stable(ticker):
     if not FMP_API_KEY: return None
     try:
+        # 使用 Stable 历史价格接口
         hist_url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={ticker}&apikey={FMP_API_KEY}"
         hist_resp = requests.get(hist_url, timeout=10)
         if hist_resp.status_code != 200: return None
@@ -260,6 +257,7 @@ def get_daily_data_stable(ticker):
         df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
         df = df.iloc[::-1].reset_index(drop=True)
         
+        # 使用 Stable Quote 接口
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         quote_resp = requests.get(quote_url, timeout=5)
         quote_data = quote_resp.json()
@@ -311,7 +309,7 @@ def analyze_daily_signals(ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
 
-    # --- 0. 估值/财报 (V8.3) ---
+    # --- 0. 估值/财报 (V8.6 Stable 修正) ---
     val_sigs, debug_info = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
@@ -368,13 +366,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V8.3 祛魅归真版Bot已启动: {bot.user}')
+    print(f'✅ V8.6 终极修正版Bot已启动 (强制Stable节点): {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V8.3)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V8.6)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
