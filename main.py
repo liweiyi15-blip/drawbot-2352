@@ -47,45 +47,60 @@ def save_data():
 # ================= 🧠 战法说明书 =================
 def get_signal_advice(t):
     advice = ""
-    if "财报" in t: advice = "高危事件: 锁定未来2周内财报，不确定性极大，建议回避！"
-    elif "DCF" in t: advice = "价值回归: 价格偏离内在价值，关注长期安全边际。"
-    elif "PEG" in t: advice = "成长性价比: 结合增速看估值。"
-    elif "PS" in t: advice = "市销率: 适用于亏损成长股的估值锚点。"
-    elif "PE" in t: advice = "市盈率: 传统估值指标出现极值。"
+    # 0. 估值 (V11.0 历史对比)
+    if "历史低位" in t: advice = "均值回归: 当前估值显著低于过去5年平均水平，黄金坑机会。"
+    elif "历史高位" in t: advice = "估值溢价: 当前估值显著高于过去5年平均水平，透支未来预期。"
+    elif "财报" in t: advice = "高危事件: 锁定近期财报窗口，不确定性大，注意风控。"
+    elif "DCF 低估" in t: advice = "价值洼地: 价格低于内在价值，具备长期安全边际。"
+    elif "PEG 低估" in t: advice = "成长性价比: 高增长消化了估值，优质GARP标的。"
+    
+    # 1. 择时
     elif "九转" in t and "买" in t: advice = "九转底部: 连跌9天，极度超跌反弹信号。"
     elif "九转" in t and "卖" in t: advice = "九转顶部: 连涨9天，情绪过热回调信号。"
     elif "十三转" in t: advice = "趋势衰竭: 趋势走到尽头，变盘在即。"
+    # 2. 资金
     elif "爆量" in t: advice = "资金异动: 主力大举进出，非散户行为。"
     elif "放量" in t: advice = "量价配合: 趋势健康。"
     elif "缩量" in t: advice = "洗盘/背离: 关注变盘。"
+    # 3. 形态
     elif "早晨" in t or "锤子" in t: advice = "底部形态: 多头抵抗。"
     elif "黄昏" in t or "断头" in t: advice = "顶部形态: 空头反扑。"
+    # 4. 趋势
     elif "多头" in t: advice = "最强趋势: 均线发散向上，顺势而为。"
     elif "空头" in t: advice = "最弱趋势: 均线发散向下，空仓观望。"
     elif "Nx" in t: advice = "通道交易: 关注通道突破与支撑。"
+    # 5. 摆动
     elif "背离" in t: advice = "先行指标: 动能衰竭。"
     elif "超买" in t or "超卖" in t: advice = "情绪极值: 获利盘/恐慌盘涌出。"
     return advice
 
-# ================= ⚖️ 评分系统 =================
+# ================= ⚖️ V11 评分系统 =================
 def get_signal_category_and_score(s):
     s = s.strip()
+    
+    # 0. 估值/事件
     if "财报" in s: return 'fundamental', 0 
-    if "DCF" in s: return 'fundamental', 3 if "低估" in s else -3
-    if "PEG" in s: return 'fundamental', 2 if "低估" in s else -2
-    if "PS" in s: return 'fundamental', 2 if "低估" in s else -2
-    if "PE" in s: return 'fundamental', 2 if "低估" in s else -2
+    # 历史估值对比 (权重高)
+    if "历史低位" in s: return 'fundamental', 3 
+    if "历史高位" in s: return 'fundamental', 0 # 高位不扣分，顺势而为
+    
+    if "DCF" in s: return 'fundamental', 2 if "低估" in s else 0
+    if "PEG" in s: return 'fundamental', 2 if "低估" in s else 0
 
+    # 1. 择时
     if "九转" in s or "十三转" in s:
         return 'timing', 4 if ("买入" in s or "底部" in s) else -4
+    # 2. 资金
     if "盘中爆量" in s: return 'volume', 4 if "抢筹" in s else -4
     if "放量" in s: return 'volume', 3 if "大涨" in s else -3
     if "缩量" in s: return 'volume', 1 if "回调" in s else -1
     
+    # 3. 形态
     p_bull = ["早晨", "阳包阴", "锤子"]; p_bear = ["断头", "阴包阳", "射击", "黄昏", "墓碑"]
     if any(x in s for x in p_bull): return 'pattern', 4
     if any(x in s for x in p_bear): return 'pattern', -4
     
+    # 4. 趋势
     t_bull_3 = ["多头排列", "年线", "唐奇安上"]
     t_bear_3 = ["空头排列", "年线", "唐奇安下"]
     t_bull_2 = ["Nx 突破", "Nx 站稳", "Nx 牛市", "R1"]
@@ -97,6 +112,7 @@ def get_signal_category_and_score(s):
     if "站上" in s: return 'trend', 1
     if "跌破" in s: return 'trend', -1
     
+    # 5. 摆动
     if "背离" in s: return 'oscillator', 3 if "底" in s else -3
     if "金叉" in s or "布林" in s or "超卖" in s: return 'oscillator', 1
     if "死叉" in s or "超买" in s: return 'oscillator', -1
@@ -159,95 +175,103 @@ def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
-# V8.6: 强制 Stable 节点
+# V11.0: 引入历史估值对比 (Historical Valuation)
 def get_valuation_and_earnings(ticker, current_price):
-    if not FMP_API_KEY: return [], "Key Missing"
+    if not FMP_API_KEY: return []
     sigs = []
-    debug_log = {} 
     
     try:
-        # 1. 📅 财报日历 (Stable Endpoint)
+        # 1. 📅 财报
         today = datetime.date.today()
         future_str = (today + datetime.timedelta(days=14)).strftime('%Y-%m-%d')
         today_str = today.strftime('%Y-%m-%d')
-        
-        # ⚠️ 注意: Stable 接口是 earnings-calendar (复数)
         cal_url = f"https://financialmodelingprep.com/stable/earnings-calendar?from={today_str}&to={future_str}&apikey={FMP_API_KEY}"
         cal_resp = requests.get(cal_url, timeout=10)
-        
-        debug_log['Cal'] = cal_resp.status_code
-        
         if cal_resp.status_code == 200:
             cal_data = cal_resp.json()
             for entry in cal_data:
-                sym = entry.get('symbol', '')
-                if ticker == sym or sym == f"{ticker}.US":
+                if ticker == entry.get('symbol'):
                     d_str = entry.get('date')
                     if d_str:
-                        e_date = parser.parse(d_str).date()
-                        diff = (e_date - today).days
-                        debug_log['NextE'] = f"{d_str}({diff})"
-                        if 0 <= diff <= 14: 
-                            sigs.append(f"⚠️ 财报预警 (T-{diff}天)")
+                        diff = (parser.parse(d_str).date() - today).days
+                        if 0 <= diff <= 14: sigs.append(f"⚠️ 财报预警 (T-{diff}天)")
                         break 
 
-        # 2. 💎 估值 (Stable Ratios TTM)
-        # ⚠️ 注意: Stable 接口使用 query param: ?symbol=AAPL
+        # 2. 📊 当前估值 (TTM)
         r_url = f"https://financialmodelingprep.com/stable/ratios-ttm?symbol={ticker}&apikey={FMP_API_KEY}"
         r_resp = requests.get(r_url, timeout=10)
-        
-        debug_log['Rat'] = r_resp.status_code
+        current_pe = None
+        current_ps = None
+        current_peg = None
+        eps_ttm = 0
         
         if r_resp.status_code == 200:
             r_data = r_resp.json()
             if r_data:
                 rd = r_data[0]
-                peg = rd.get('priceToEarningsGrowthRatioTTM')
-                ps = rd.get('priceToSalesRatioTTM')
-                pe = rd.get('priceToEarningsRatioTTM')
+                current_pe = rd.get('priceToEarningsRatioTTM')
+                current_ps = rd.get('priceToSalesRatioTTM')
+                current_peg = rd.get('priceToEarningsGrowthRatioTTM')
                 eps_ttm = rd.get('netIncomePerShareTTM', 0)
-                
-                debug_log['PEG'] = peg
-                debug_log['PS'] = ps
-                
-                if eps_ttm > 0:
-                    if peg is not None:
-                        if 0 < peg < 1.2: sigs.append(f"💎 PEG 低估 ({peg:.2f})")
-                        elif peg > 2.5: sigs.append(f"💎 PEG 高估 ({peg:.2f})")
-                    if pe is not None:
-                        if 0 < pe < 20: sigs.append(f"💎 PE 低估 ({pe:.1f}x)")
-                        elif pe > 60: sigs.append(f"💎 PE 泡沫 ({pe:.1f}x)")
-                else:
-                    if ps is not None:
-                        if ps < 2.0: sigs.append(f"💎 PS 低估 ({ps:.2f}x)")
-                        elif ps > 12: sigs.append(f"💎 PS 泡沫 ({ps:.2f}x)")
 
-        # 3. DCF (Stable DCF)
-        # ⚠️ 注意: Stable 接口使用 query param
+        # 3. 📜 历史估值 (Past 5 Years)
+        # 使用 ratios 接口，limit=5 (Annual)
+        h_url = f"https://financialmodelingprep.com/stable/ratios?symbol={ticker}&limit=5&apikey={FMP_API_KEY}"
+        h_resp = requests.get(h_url, timeout=10)
+        
+        avg_pe = 0
+        avg_ps = 0
+        
+        if h_resp.status_code == 200:
+            h_data = h_resp.json()
+            if h_data:
+                # 计算5年平均值 (过滤掉负值)
+                pe_list = [x.get('priceToEarningsRatio', 0) for x in h_data if x.get('priceToEarningsRatio', 0) > 0]
+                ps_list = [x.get('priceToSalesRatio', 0) for x in h_data if x.get('priceToSalesRatio', 0) > 0]
+                
+                if pe_list: avg_pe = sum(pe_list) / len(pe_list)
+                if ps_list: avg_ps = sum(ps_list) / len(ps_list)
+
+        # --- 4. 综合判定 (当前 vs 历史) ---
+        
+        # A. 盈利公司 (看 PE 均值回归)
+        if eps_ttm > 0:
+            # PEG 依然看绝对值
+            if current_peg is not None and 0 < current_peg < 1.2:
+                sigs.append(f"PEG 低估 ({current_peg:.2f})")
+            
+            # PE 看历史相对值
+            if current_pe is not None and avg_pe > 0:
+                if current_pe < avg_pe * 0.8: # 低于历史均值 20%
+                    sigs.append(f"PE 历史低位 ({current_pe:.1f} vs Avg {avg_pe:.1f})")
+                elif current_pe > avg_pe * 1.3: # 高于历史均值 30%
+                    sigs.append(f"PE 历史高位 ({current_pe:.1f} vs Avg {avg_pe:.1f})")
+        
+        # B. 亏损公司 (看 PS 均值回归)
+        else:
+            if current_ps is not None and avg_ps > 0:
+                if current_ps < avg_ps * 0.8:
+                    sigs.append(f"PS 历史低位 ({current_ps:.2f} vs Avg {avg_ps:.2f})")
+                elif current_ps > avg_ps * 1.3:
+                    sigs.append(f"PS 历史高位 ({current_ps:.2f} vs Avg {avg_ps:.2f})")
+
+        # 5. DCF (Absolute Value)
         d_url = f"https://financialmodelingprep.com/stable/discounted-cash-flow?symbol={ticker}&apikey={FMP_API_KEY}"
         d_resp = requests.get(d_url, timeout=10)
-        
-        debug_log['DCF'] = d_resp.status_code
-        
         if d_resp.status_code == 200:
             d_data = d_resp.json()
-            if d_data and len(d_data) > 0 and 'dcf' in d_data[0]:
+            if d_data and 'dcf' in d_data[0]:
                 dcf = d_data[0]['dcf']
-                debug_log['Val'] = dcf
                 if dcf > 0:
-                    if current_price < dcf * 0.85: sigs.append(f"💎 DCF 低估 (${dcf:.1f})")
-                    elif current_price > dcf * 1.4: sigs.append(f"💎 DCF 高估 (${dcf:.1f})")
+                    if current_price < dcf * 0.85: sigs.append(f"DCF 低估 (${dcf:.1f})")
+                    elif current_price > dcf * 2.0: sigs.append(f"DCF 溢价 (${dcf:.1f})")
 
-    except Exception as e:
-        debug_log['Err'] = str(e)
-        
-    debug_str = " | ".join([f"{k}:{v}" for k,v in debug_log.items()])
-    return sigs, debug_str
+    except: pass
+    return sigs
 
 def get_daily_data_stable(ticker):
     if not FMP_API_KEY: return None
     try:
-        # 使用 Stable 历史价格接口
         hist_url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={ticker}&apikey={FMP_API_KEY}"
         hist_resp = requests.get(hist_url, timeout=10)
         if hist_resp.status_code != 200: return None
@@ -257,7 +281,6 @@ def get_daily_data_stable(ticker):
         df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
         df = df.iloc[::-1].reset_index(drop=True)
         
-        # 使用 Stable Quote 接口
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         quote_resp = requests.get(quote_url, timeout=5)
         quote_data = quote_resp.json()
@@ -277,13 +300,11 @@ def get_daily_data_stable(ticker):
         df['date'] = pd.to_datetime(df['date'])
         df.set_index('date', inplace=True)
         return df
-    except Exception as e:
-        print(f"❌ 数据处理异常 {ticker}: {e}")
-        return None
+    except: return None
 
 def analyze_daily_signals(ticker):
     df = get_daily_data_stable(ticker)
-    if df is None or len(df) < 250: return None, None, "No Data"
+    if df is None or len(df) < 250: return None, None
     signals = []
     
     df['nx_blue_up'] = df['high'].ewm(span=24, adjust=False).mean()
@@ -309,11 +330,11 @@ def analyze_daily_signals(ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
 
-    # --- 0. 估值/财报 (V8.6 Stable 修正) ---
-    val_sigs, debug_info = get_valuation_and_earnings(ticker, price)
+    # 0. 估值 (V11.0 历史对比)
+    val_sigs = get_valuation_and_earnings(ticker, price)
     signals.extend(val_sigs)
 
-    # --- 1. 内置算法: 九转/十三转 ---
+    # 1. 九转/十三转
     try:
         work_df = df.iloc[-50:].copy()
         c = work_df['CLOSE'].values
@@ -328,7 +349,7 @@ def analyze_daily_signals(ticker):
         elif sell_setup == 9: signals.append("神奇九转: 顶部卖出信号 (9)")
         if buy_setup == 13: signals.append("迪玛克十三转: 终极底部 (13)")
         elif sell_setup == 13: signals.append("迪玛克十三转: 终极顶部 (13)")
-    except Exception as e: print(f"Algo Error: {e}")
+    except: pass
 
     # Nx
     is_break_blue = prev['CLOSE'] < prev['NX_BLUE_UP'] and curr['CLOSE'] > curr['NX_BLUE_UP']
@@ -360,19 +381,19 @@ def analyze_daily_signals(ticker):
     if body > 0 and lower_shadow > (body * 2) and curr['RSI_14'] < 50: signals.append("锤子线")
     if prev['CLOSE'] < prev['OPEN'] and curr['CLOSE'] > curr['OPEN'] and curr['OPEN'] < prev['CLOSE'] and curr['CLOSE'] > prev['OPEN']: signals.append("阳包阴")
 
-    return price, signals, debug_info
+    return price, signals
 
 # ================= Bot 指令集 =================
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V8.6 终极修正版Bot已启动 (强制Stable节点): {bot.user}')
+    print(f'✅ V11.0 历史锚定版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V8.6)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V11.0)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
@@ -384,7 +405,7 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
     await interaction.response.defer()
     stock_list = tickers.upper().replace(',', ' ').split()[:5]
     for ticker in stock_list:
-        price, signals, debug_info = analyze_daily_signals(ticker)
+        price, signals = analyze_daily_signals(ticker)
         if price is None:
             await interaction.followup.send(f"❌ 无法获取 {ticker} 数据")
             continue
@@ -397,9 +418,7 @@ async def check_stocks(interaction: discord.Interaction, tickers: str):
         embed.set_image(url=get_finviz_chart_url(ticker))
         
         ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
-        footer_text = f"FMP Ultimate API • [DEBUG] {debug_info}"
-        if len(footer_text) > 2000: footer_text = footer_text[:2000]
-        embed.set_footer(text=footer_text)
+        embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
         
         await interaction.followup.send(embed=embed)
 
@@ -448,11 +467,13 @@ async def daily_monitor():
     today = datetime.datetime.now().strftime('%Y-%m-%d')
     print(f"🔎 启动收盘扫描: {today} (美东 16:01)")
     
+    ny_now_str = datetime.datetime.now(ny_tz).strftime('%H:%M')
+
     for user_id, stocks in watch_data.items():
         user_alerts = []
         for ticker, data in stocks.items():
             try:
-                price, signals, debug_info = analyze_daily_signals(ticker)
+                price, signals = analyze_daily_signals(ticker)
                 if signals:
                     score, desc_final = generate_report_content(signals)
                     should_alert = False
@@ -465,7 +486,7 @@ async def daily_monitor():
                         text_part, color = format_dashboard_title(score)
                         embed = discord.Embed(title=f"{ticker} : {text_part}", description=f"**现价**: ${price:.2f}\n\n{desc_final}", color=color)
                         embed.set_image(url=get_finviz_chart_url(ticker))
-                        embed.set_footer(text=f"[DEBUG] {debug_info}")
+                        embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_now_str}")
                         user_alerts.append(embed)
             except Exception as e: print(f"Error {ticker}: {e}")
         if user_alerts:
