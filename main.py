@@ -9,6 +9,7 @@ import os
 import json
 import asyncio
 import pytz 
+from dateutil import parser
 
 # ================= 配置区域 =================
 TOKEN = os.getenv('DISCORD_TOKEN') 
@@ -47,8 +48,15 @@ def save_data():
 # ================= 🧠 战法说明书 =================
 def get_signal_advice(t):
     advice = ""
+    # 0. 💎 估值/事件
+    if "财报" in t: advice = "高危事件: 官方日历显示临近财报（T-5），波动率极高，建议回避。"
+    elif "DCF 低估" in t: advice = "价值洼地: 价格低于未来现金流折现，具备长期安全边际。"
+    elif "DCF 高估" in t: advice = "价值透支: 价格远超内在价值，需警惕回归风险。"
+    elif "PEG 低估" in t: advice = "成长价值: 业绩正增长且估值合理，优质GARP标的。"
+    elif "PEG 高估" in t: advice = "增长陷阱: 业绩增速撑不起当前的股价。"
+    
     # 1. ⏳ 择时
-    if "九转" in t and "买入" in t: advice = "九转底部: 连跌9天，极度超跌，反弹一触即发。"
+    elif "九转" in t and "买入" in t: advice = "九转底部: 连跌9天，极度超跌，反弹一触即发。"
     elif "九转" in t and "卖出" in t: advice = "九转顶部: 连涨9天，情绪过热，建议分批止盈。"
     elif "十三转" in t and "底部" in t: advice = "终极底部: 趋势衰竭的极值，左侧交易皇冠上的明珠。"
     elif "十三转" in t and "顶部" in t: advice = "终极顶部: 趋势高潮的极值，风险极大，必须清仓。"
@@ -83,16 +91,29 @@ def get_signal_advice(t):
 # ================= ⚖️ 评分系统 =================
 def get_signal_category_and_score(s):
     s = s.strip()
+    # 0. 💎 基本面/估值/事件
+    if "财报" in s: return 'fundamental', 0 
+    if "DCF" in s:
+        if "低估" in s: return 'fundamental', 3
+        if "高估" in s: return 'fundamental', -3
+    if "PEG" in s:
+        if "低估" in s: return 'fundamental', 2
+        if "高估" in s: return 'fundamental', -2
+
+    # 1. ⏳ 择时
     if "九转" in s or "十三转" in s:
         if "买入" in s or "底部" in s: return 'timing', 4
         if "卖出" in s or "顶部" in s: return 'timing', -4
+    # 2. 💰 资金
     if "盘中爆量" in s: return 'volume', 4 if "抢筹" in s else -4
     if "放量" in s: return 'volume', 3 if "大涨" in s else -3
     if "缩量" in s: return 'volume', 1 if "回调" in s else -1
+    # 3. 🕯️ 形态
     p_bull = ["早晨之星", "阳包阴", "锤子"]
     p_bear = ["断头铡刀", "阴包阳", "射击之星", "黄昏之星", "墓碑"]
     if any(x in s for x in p_bull): return 'pattern', 4
     if any(x in s for x in p_bear): return 'pattern', -4
+    # 4. 📈 趋势
     t_bull_3 = ["多头排列", "突破年线", "突破唐奇安"]
     t_bear_3 = ["空头排列", "跌破年线", "跌破唐奇安"]
     t_bull_2 = ["Nx 突破", "Nx 站稳", "Nx 牛市", "突破 R1"]
@@ -105,6 +126,7 @@ def get_signal_category_and_score(s):
     if any(x in s for x in t_bear_2): return 'trend', -2
     if any(x in s for x in t_bull_1): return 'trend', 1
     if any(x in s for x in t_bear_1): return 'trend', -1
+    # 5. 🌊 摆动
     o_bull_3 = ["底背离"]; o_bear_3 = ["顶背离"]
     o_bull_2 = ["MACD 金叉", "突破布林", "ADX"]; o_bear_2 = ["MACD 死叉", "跌破布林"]
     o_bull_1 = ["超卖", "触底", "回升", "KDJ 低位"]; o_bear_1 = ["超买", "见顶", "滞涨"]
@@ -117,17 +139,13 @@ def get_signal_category_and_score(s):
     return 'other', 0
 
 def generate_report_content(signals):
-    """
-    V6.1: 移除灯泡 + 强制物理隔离
-    """
     items = []
     for s in signals:
         cat, score = get_signal_category_and_score(s)
         items.append({'raw': s, 'cat': cat, 'score': score, 'active': False})
 
-    # 标记有效性
     for item in items:
-        if item['cat'] in ['volume', 'timing']:
+        if item['cat'] in ['volume', 'timing', 'fundamental']:
             item['active'] = True
 
     for cat in ['trend', 'pattern', 'oscillator']:
@@ -137,7 +155,7 @@ def generate_report_content(signals):
             best['active'] = True
 
     total_score = 0
-    active_blocks = []  # 使用块存储，方便控制间距
+    active_blocks = [] 
     inactive_lines = []
     
     for item in items:
@@ -146,26 +164,16 @@ def generate_report_content(signals):
         
         if item['active']:
             total_score += score_val
-            # 构建一个完整的有效信号块
             block = f"### {item['raw']} ({score_str})"
             advice = get_signal_advice(item['raw'])
-            if advice:
-                # 引用说明，无emoji
-                block += f"\n> {advice}"
+            if advice: block += f"\n> {advice}"
             active_blocks.append(block)
         else:
             if score_val != 0:
                 inactive_lines.append(f"> 🔸 {item['raw']} ({score_str}) [已去重]")
 
-    # 1. 有效信号部分
-    # 每个块之间加个换行，保持呼吸感
     final_text = "\n".join(active_blocks)
-    
-    # 2. 物理隔离带 + 去重部分
-    if inactive_lines:
-        # \n\n 强制打断引用块，防止去重列表和上面的说明粘连
-        final_text += "\n\n" + "\n".join(inactive_lines)
-
+    if inactive_lines: final_text += "\n\n" + "\n".join(inactive_lines)
     return total_score, final_text
 
 def format_dashboard_title(score):
@@ -179,7 +187,6 @@ def format_dashboard_title(score):
     elif score <= -4: status, color = "极度高危", discord.Color.green()
     elif score <= -1: status, color = "趋势看空", discord.Color.dark_teal()
     else: status, color = "震荡整理", discord.Color.gold()
-    
     score_title = f"+{score}" if score > 0 else f"{score}"
     return f"{status} ({score_title}) {icons}", color
 
@@ -187,6 +194,76 @@ def format_dashboard_title(score):
 def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
+
+# V7.4: 采用官方日历接口 (Official Calendar Endpoint)
+def get_valuation_and_earnings(ticker, current_price):
+    if not FMP_API_KEY: return []
+    sigs = []
+    try:
+        # 1. 📅 官方财报日历 (Historical/Upcoming)
+        # 文档: https://site.financialmodelingprep.com/developer/docs/earnings-calendar-api
+        # 逻辑: 取列表，解析日期，找最近的未来日期
+        cal_url = f"https://financialmodelingprep.com/api/v3/historical/earning_calendar/{ticker}?limit=10&apikey={FMP_API_KEY}"
+        cal_resp = requests.get(cal_url, timeout=5)
+        
+        if cal_resp.status_code == 200:
+            cal_data = cal_resp.json()
+            if cal_data:
+                today = datetime.date.today()
+                # 遍历列表寻找未来日期
+                # 列表通常是降序排列，但为了保险，我们遍历查找 >= today 的最小日期
+                future_dates = []
+                for entry in cal_data:
+                    date_str = entry.get('date')
+                    if date_str:
+                        try:
+                            e_date = parser.parse(date_str).date()
+                            if e_date >= today:
+                                future_dates.append(e_date)
+                        except: pass
+                
+                if future_dates:
+                    # 找到离今天最近的未来日期
+                    next_date = min(future_dates)
+                    days_diff = (next_date - today).days
+                    if 0 <= days_diff <= 5:
+                        sigs.append(f"⚠️ 财报预警 (T-{days_diff}天)")
+
+        # 2. PEG & DCF 基础数据
+        # 获取 EPS 以清洗 PEG
+        quote_url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={FMP_API_KEY}"
+        quote_resp = requests.get(quote_url, timeout=5)
+        eps = 0
+        if quote_resp.status_code == 200:
+            q_data = quote_resp.json()
+            if q_data: eps = q_data[0].get('eps', 0)
+
+        # 获取 DCF
+        dcf_url = f"https://financialmodelingprep.com/api/v3/discounted-cash-flow/{ticker}?apikey={FMP_API_KEY}"
+        dcf_resp = requests.get(dcf_url, timeout=5)
+        if dcf_resp.status_code == 200:
+            d_data = dcf_resp.json()
+            if d_data and 'dcf' in d_data[0]:
+                dcf = d_data[0]['dcf']
+                if dcf > 0:
+                    if current_price < dcf * 0.8: sigs.append(f"💎 DCF 低估 (估值:${dcf:.1f})")
+                    elif current_price > dcf * 1.5: sigs.append(f"💎 DCF 高估 (估值:${dcf:.1f})")
+
+        # 获取 PEG
+        ratios_url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={FMP_API_KEY}"
+        ratios_resp = requests.get(ratios_url, timeout=5)
+        if ratios_resp.status_code == 200:
+            r_data = ratios_resp.json()
+            if r_data and 'pegRatioTTM' in r_data[0]:
+                peg = r_data[0]['pegRatioTTM']
+                # 硬过滤：EPS必须为正，PEG才有效
+                if peg is not None and eps > 0:
+                    if 0 < peg < 1.0: sigs.append(f"💎 PEG 低估 ({peg:.2f})")
+                    elif peg > 2.0: sigs.append(f"💎 PEG 高估 ({peg:.2f})")
+
+    except Exception as e:
+        print(f"Valuation Error {ticker}: {e}")
+    return sigs
 
 def get_daily_data_stable(ticker):
     if not FMP_API_KEY: return None
@@ -199,6 +276,7 @@ def get_daily_data_stable(ticker):
         df = pd.DataFrame(hist_data)
         df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
         df = df.iloc[::-1].reset_index(drop=True)
+        
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         quote_resp = requests.get(quote_url, timeout=5)
         quote_data = quote_resp.json()
@@ -251,7 +329,11 @@ def analyze_daily_signals(ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; 
     price = curr['CLOSE']
 
-    # ================= 内置算法: 九转/十三转 =================
+    # --- 0. 估值/财报分析 (V7.4 修正版) ---
+    val_sigs = get_valuation_and_earnings(ticker, price)
+    signals.extend(val_sigs)
+
+    # --- 1. 内置算法: 九转/十三转 ---
     try:
         work_df = df.iloc[-50:].copy()
         c = work_df['CLOSE'].values
@@ -312,13 +394,13 @@ def analyze_daily_signals(ticker):
 @bot.event
 async def on_ready():
     load_data()
-    print(f'✅ V6.1 视觉修正版Bot已启动: {bot.user}')
+    print(f'✅ V7.4 机构合规版Bot已启动: {bot.user}')
     await bot.tree.sync()
     if not daily_monitor.is_running(): daily_monitor.start()
 
 @bot.tree.command(name="help_bot", description="显示指令手册")
 async def help_bot(interaction: discord.Interaction):
-    embed = discord.Embed(title="🤖 指令手册 (V6.1)", color=discord.Color.blue())
+    embed = discord.Embed(title="🤖 指令手册 (V7.4)", color=discord.Color.blue())
     embed.add_field(name="🔒 隐私说明", value="您添加的列表仅自己可见，Bot会单独艾特您推送。", inline=False)
     embed.add_field(name="📋 监控", value="`/add [代码]` : 添加自选\n`/remove [代码]` : 删除自选\n`/list` : 查看我的列表", inline=False)
     embed.add_field(name="🔎 临时查询", value="`/check [代码]` : 立刻分析", inline=False)
