@@ -226,7 +226,7 @@ def get_daily_data_stable(ticker):
         logger.error(f"❌ Error getting daily data for {ticker}: {e}")
         return None, None
 
-# ================= 🧠 V34.7 引擎 =================
+# ================= 🧠 V34.8 引擎 =================
 
 def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; price = curr['CLOSE']
@@ -336,25 +336,46 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
             final_score = max(final_score, 9.9); special_signals.append(f"☢️ **机构建仓区启动**")
     except: pass
     
-    # 动态止损：高分时使用更紧的止损 (2ATR)，普通使用 (3ATR)
-    stop_multiplier = 2.0 if final_score >= 8.5 else 3.0
+    # 🛑 止损策略 V34.8 (双轨制：科学/宽容)
+    stop_msg = ""
     try:
-        highest_22 = df['HIGH'].rolling(22).max().iloc[-1]
-        chandelier_stop = highest_22 - stop_multiplier * atr
-        chandelier_stop = min(chandelier_stop, price * 0.98)
-    except: chandelier_stop = price * 0.92
+        if final_score >= 6.0:
+            # 方案A: 强势股使用 Chandelier Exit (吊灯止损) - 紧跟趋势锁利润
+            stop_multiplier = 2.5 if final_score >= 8.5 else 3.0
+            highest_22 = df['HIGH'].rolling(22).max().iloc[-1]
+            chandelier_stop = highest_22 - stop_multiplier * atr
+            chandelier_stop = min(chandelier_stop, price * 0.98) # 至少留2%空间
+            stop_msg = "(吊灯止盈)"
+        else:
+            # 方案B: 弱势/震荡股使用 Donchian Structural Support (唐奇安结构支撑) - 给予呼吸空间
+            # 逻辑：只要不跌破过去21天的最低点(结构破坏)，就允许波动
+            lowest_21 = df['LOW'].rolling(21).min().iloc[-1]
+            # 在前低基础上再给 0.5 ATR 的缓冲，防止插针
+            chandelier_stop = lowest_21 - 0.5 * atr 
+            
+            # 兜底：如果前低太远(比如20%以外)，强行截断在 10% 以内，防止单笔暴亏
+            max_loss_price = price * 0.90
+            chandelier_stop = max(chandelier_stop, max_loss_price)
+            stop_msg = "(结构前低)"
+
+    except: 
+        chandelier_stop = price * 0.90
+        stop_msg = "(默认兜底)"
     
     debug_formula = f"{base_score}*{trend_score:.1f}*{vsa_score:.1f}*{fund_score:.1f}*{sector_score:.1f}"
     if vol_score != 1.0: debug_formula += f"*{vol_score:.1f}"
     
-    return final_score, special_signals, chandelier_stop, atr_pct, trend_msg, vsa_msg, fund_msg, sector_msg, regime_msg, vol_msg, debug_formula
+    return final_score, special_signals, chandelier_stop, atr_pct, trend_msg, vsa_msg, fund_msg, sector_msg, regime_msg, vol_msg, debug_formula, stop_msg
 
 # 🧠 科学动态仓位管理 (V34.7核心修改)
-def calculate_position_size(atr_pct, final_score):
+def calculate_position_size(atr_pct, final_score, price, stop_price):
     if final_score < 2.0: return "空仓/观望"
     
+    # 计算止损距离百分比
+    stop_distance_pct = (price - stop_price) / price
+    if stop_distance_pct <= 0: return "0% (数据异常)"
+
     # 1. 动态风险敞口 (Risk Appetite)
-    # 分数越高，愿意承担的单笔本金回撤越大 (凯利公式逻辑)
     if final_score >= 9.0:
         risk_per_trade = 0.020  # 极值共振：允许亏损总资金的 2.0%
     elif final_score >= 7.5:
@@ -362,23 +383,17 @@ def calculate_position_size(atr_pct, final_score):
     elif final_score >= 6.0:
         risk_per_trade = 0.010  # 正常交易：允许亏损总资金的 1.0%
     else:
-        risk_per_trade = 0.005  # 左侧/博弈：仅允许亏损总资金的 0.5%
+        risk_per_trade = 0.005  # 左侧/博弈：仅允许亏损总资金的 0.5% (风险厌恶)
         
-    # 2. 动态止损宽幅
-    # 高分意味着预期立刻反转，止损应更窄，从而允许更大仓位
-    stop_multiplier = 2.0 if final_score >= 8.5 else 3.0
-    stop_distance_pct = stop_multiplier * atr_pct
-    
-    if stop_distance_pct <= 0.001: return "0%"
-    
-    # 3. 计算仓位
+    # 2. 计算仓位
+    # 公式：仓位 = 单笔风险金额 / 止损距离
+    # 例子：愿意亏100元，止损距离是10%，那就能买1000元货 (10%仓位)
     position_size = risk_per_trade / stop_distance_pct
     pos_pct = position_size * 100
     
-    # 4. 科学修正 (Floor & Cap)
-    # 如果分数极高(>9.0)，且波动率不是天文数字，给予保底仓位
+    # 3. 科学修正 (Floor & Cap)
     if final_score >= 9.0: 
-        pos_pct = max(pos_pct, 5.0) # 9分以上至少买5%
+        pos_pct = max(pos_pct, 5.0) 
         
     pos_pct = min(pos_pct, 40) # 无论多好，单票不超过40%
     
@@ -400,7 +415,7 @@ def get_pos_comment(score):
 
 # ================= Bot 指令 =================
 
-@bot.tree.command(name="check", description="V34.7 战术指令版")
+@bot.tree.command(name="check", description="V34.8 战术指令版")
 async def check_stocks(interaction: discord.Interaction, ticker: str):
     if not interaction.response.is_done(): await interaction.response.defer()
     t = ticker.split()[0].replace(',', '').upper()
@@ -412,10 +427,11 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
         if df is None: return await interaction.followup.send(f"❌ 数据失败: {t}")
         fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
         
-        score, specials, chandelier, atr_pct, t_msg, v_msg, f_msg, s_msg, r_msg, vl_msg, formula = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
+        score, specials, chandelier, atr_pct, t_msg, v_msg, f_msg, s_msg, r_msg, vl_msg, formula, stop_source_msg = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
         
         price = df['CLOSE'].iloc[-1]
-        pos_advice = calculate_position_size(atr_pct, score)
+        # 传递真实的止损价格进仓位计算，实现"止损宽则仓位小"的自动风控
+        pos_advice = calculate_position_size(atr_pct, score, price, chandelier)
         pos_comment = get_pos_comment(score) # 获取战术后缀
         short_comm = get_short_comment(score, t_msg)
         
@@ -438,7 +454,8 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
         desc += f"**仓位**: `{pos_advice}` ({pos_comment})\n" 
         
         if "禁止" in t_msg: desc += f"**趋势警告**: 🚫 已跌破长期均线，禁止做多\n"
-        desc += f"**多头止损**: `${chandelier:.2f}` (跌破即跑)\n"
+        # 🟢 在描述里注明止损来源，让你知道是科学依据
+        desc += f"**多头止损**: `${chandelier:.2f}` {stop_source_msg} (跌破即跑)\n"
         
         embed.description = desc
         
@@ -488,12 +505,12 @@ async def list_stocks(interaction: discord.Interaction):
         df, quote = await loop.run_in_executor(None, get_daily_data_stable, t)
         if df is None: continue
         fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
-        score, specials, _, _, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
+        score, specials, _, _, _, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
         icon = "🔥" if score > 7 else "💀" if score < 4 else "⚖️"
         if any("冰点" in s for s in specials): icon = "🧊"
         lines.append(f"**{t}**: `{score:.1f}` {icon}")
     
-    embed = discord.Embed(title="📊 V34.7 机构看板", description="\n".join(lines), color=discord.Color.blue())
+    embed = discord.Embed(title="📊 V34.8 机构看板", description="\n".join(lines), color=discord.Color.blue())
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="add", description="添加")
@@ -527,7 +544,7 @@ async def daily_monitor():
             df, quote = await loop.run_in_executor(None, get_daily_data_stable, t)
             if df is None: continue
             fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
-            score, specials, stop, atr_pct, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
+            score, specials, stop, atr_pct, _, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
             
             if score >= 7.0 or score < 4.0 or specials:
                 price = df['CLOSE'].iloc[-1]
@@ -537,7 +554,7 @@ async def daily_monitor():
                 summary_lines.append(f"{icon} **{t}** ({score:.1f}): ${price:.2f}{spec_str}")
 
         if summary_lines:
-            msg = f"📊 <@{uid}> **V34.7 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
+            msg = f"📊 <@{uid}> **V34.8 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
             await channel.send(msg[:1900])
             await asyncio.sleep(1)
 
@@ -554,7 +571,7 @@ async def premarket_alert():
             df, quote = await loop.run_in_executor(None, get_daily_data_stable, t)
             if df is None: continue
             fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
-            score, specials, _, _, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
+            score, specials, _, _, _, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
             if specials:
                 price = df['CLOSE'].iloc[-1]
                 pre_alerts.append(f"☢️ **{t}**: ${price:.2f} | {' '.join(specials)}")
@@ -566,7 +583,7 @@ async def premarket_alert():
 async def on_ready():
     load_data()
     api_cache_daily.clear(); api_cache_fund.clear(); api_cache_sector.clear()
-    logger.info("✅ V34.7 Tactical Command Edition Started.")
+    logger.info("✅ V34.8 Tactical Command Edition Started.")
     await bot.tree.sync()
     daily_monitor.start()
     premarket_alert.start()
