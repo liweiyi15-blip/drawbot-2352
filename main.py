@@ -202,33 +202,39 @@ def get_daily_data_stable(ticker):
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         curr_quote = requests.get(quote_url, timeout=5).json()[0]
         
-        # 🔥 V34.95 补丁：如果 Quote 里的 Earn 为空，强制调用日历接口补救
+        # 🔥 V34.96 修复：使用正确的 earning_calendar 接口 (非历史)
         earn_date = curr_quote.get('earningsAnnouncement')
         
         if not earn_date:
             try:
-                # 备用：历史日历接口，通常包含未来预测
-                cal_url = f"https://financialmodelingprep.com/api/v3/historical/earning_calendar/{ticker}?limit=4&apikey={FMP_API_KEY}"
+                # 修正：使用 earning_calendar?symbol=... 才能获取最新的确认日期
+                cal_url = f"https://financialmodelingprep.com/api/v3/earning_calendar?symbol={ticker}&apikey={FMP_API_KEY}"
+                
+                # 记录我们正在尝试 fallback
+                log_api_call(cal_url, "Attempting Fallback Calendar Search", "FALLBACK_CALENDAR")
+                
                 cal_resp = requests.get(cal_url, timeout=3).json()
                 
-                # 寻找 >= 今天的最近日期
+                # 寻找 >= 今天的最近日期 (或者哪怕是今天的)
                 today_dt = datetime.datetime.now().date()
                 future_dates = []
-                for item in cal_resp:
-                    d_str = item.get('date')
-                    if d_str:
-                        d_obj = pd.to_datetime(d_str).date()
-                        if d_obj >= today_dt:
-                            future_dates.append(d_str)
+                
+                if isinstance(cal_resp, list):
+                    for item in cal_resp:
+                        d_str = item.get('date')
+                        if d_str:
+                            d_obj = pd.to_datetime(d_str).date()
+                            # 只要是今天或以后的都算
+                            if d_obj >= today_dt:
+                                future_dates.append(d_str)
                 
                 if future_dates:
-                    # 排序取最近的一个
-                    future_dates.sort()
+                    future_dates.sort() # 最近的排前面
                     curr_quote['earningsAnnouncement'] = future_dates[0]
                     earn_date = future_dates[0]
-                    logger.info(f"✅ [FALLBACK] Success found Earn Date for {ticker}: {earn_date}")
+                    logger.info(f"✅ [FALLBACK] Success found Future Earn Date for {ticker}: {earn_date}")
                 else:
-                    logger.warning(f"⚠️ [FALLBACK] No future earnings found in calendar for {ticker}")
+                    logger.warning(f"⚠️ [FALLBACK] No future earnings found in v3/earning_calendar for {ticker}")
             except Exception as e:
                 logger.error(f"⚠️ [FALLBACK] Error: {e}")
 
@@ -257,7 +263,7 @@ def get_daily_data_stable(ticker):
         logger.error(f"❌ Error getting daily data for {ticker}: {e}")
         return None, None
 
-# ================= 🧠 V34.95 引擎 =================
+# ================= 🧠 V34.96 引擎 =================
 
 def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; price = curr['CLOSE']
@@ -349,18 +355,19 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     
     special_signals = []
     
-    # 🚨 财报雷达 (V34.95 双保险版)
+    # 🚨 财报雷达 (V34.96)
     earn_msg = ""
     try:
         earn_date_str = quote_data.get('earningsAnnouncement')
         if earn_date_str:
-            # 格式清洗，FMP有时返回 2025-11-26T16:00:00.000+0000
+            # 格式清洗
             earn_dt = parser.parse(earn_date_str).replace(tzinfo=None)
-            now_dt = datetime.datetime.now()
+            now_dt = datetime.datetime.now().replace(tzinfo=None) # 确保无时区对比
             days_diff = (earn_dt - now_dt).days
             
-            if 0 <= days_diff <= 5:
-                special_signals.append(f"🧨 **财报高危**: {days_diff}天后公布")
+            # 逻辑：过去1天内(今天刚发) 或 未来5天内
+            if -1 <= days_diff <= 5:
+                special_signals.append(f"🧨 **财报高危**: {earn_date_str}")
                 # 财报前5天，强制降低确定性，扣分
                 final_score *= 0.8
                 earn_msg = f"财报前{days_diff}天(x0.8)"
@@ -460,7 +467,7 @@ def get_pos_comment(score):
 
 # ================= Bot 指令 =================
 
-@bot.tree.command(name="check", description="V34.95 战术指令版")
+@bot.tree.command(name="check", description="V34.96 战术指令版")
 async def check_stocks(interaction: discord.Interaction, ticker: str):
     if not interaction.response.is_done(): await interaction.response.defer()
     t = ticker.split()[0].replace(',', '').upper()
@@ -553,7 +560,7 @@ async def list_stocks(interaction: discord.Interaction):
         if any("冰点" in s for s in specials): icon = "🧊"
         lines.append(f"**{t}**: `{score:.1f}` {icon}")
     
-    embed = discord.Embed(title="📊 V34.95 机构看板", description="\n".join(lines), color=discord.Color.blue())
+    embed = discord.Embed(title="📊 V34.96 机构看板", description="\n".join(lines), color=discord.Color.blue())
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="add", description="添加")
@@ -597,7 +604,7 @@ async def daily_monitor():
                 summary_lines.append(f"{icon} **{t}** ({score:.1f}): ${price:.2f}{spec_str}")
 
         if summary_lines:
-            msg = f"📊 <@{uid}> **V34.95 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
+            msg = f"📊 <@{uid}> **V34.96 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
             await channel.send(msg[:1900])
             await asyncio.sleep(1)
 
@@ -626,7 +633,7 @@ async def premarket_alert():
 async def on_ready():
     load_data()
     api_cache_daily.clear(); api_cache_fund.clear(); api_cache_sector.clear()
-    logger.info("✅ V34.95 Tactical Command Edition Started.")
+    logger.info("✅ V34.96 Tactical Command Edition Started.")
     await bot.tree.sync()
     daily_monitor.start()
     premarket_alert.start()
