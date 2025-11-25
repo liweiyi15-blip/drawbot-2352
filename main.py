@@ -73,19 +73,26 @@ def get_comment(raw_text):
         if key in raw_text: return comment
     return ""
 
-# ================= 数据存取 =================
+# ================= 数据存取 (已修复语法错误) =================
 def load_data():
     global watch_data
     if os.path.exists(DATA_FILE):
-        try: with open(DATA_FILE, 'r') as f: watch_data = json.load(f)
-        except: watch_data = {}
-    else: save_data()
+        try:
+            with open(DATA_FILE, 'r') as f:
+                watch_data = json.load(f)
+        except:
+            watch_data = {}
+    else:
+        save_data()
 
 def save_data():
-    try: with open(DATA_FILE, 'w') as f: json.dump(watch_data, f, indent=4)
-    except: pass
+    try:
+        with open(DATA_FILE, 'w') as f:
+            json.dump(watch_data, f, indent=4)
+    except:
+        pass
 
-# ================= 🛡️ V29.1 机构实盘评分 (权重精调版) =================
+# ================= 🛡️ V29.1 机构实盘评分 =================
 def get_signal_score(s, regime="TREND"):
     s = s.strip()
     
@@ -93,7 +100,6 @@ def get_signal_score(s, regime="TREND"):
     if "💡" in s: return 0.0 
 
     # --- 🔥 核心重点信号 (实盘验证高胜率) ---
-    # 这里的权重根据 V29.1 实战反馈进行了非线性调整
     if "云上金叉" in s: return 3.3
     if "云下死叉" in s: return -3.3
     
@@ -117,8 +123,8 @@ def get_signal_score(s, regime="TREND"):
         if "缩量回调" in s: return 0.5
 
     # --- C. 趋势核心 (常规) ---
-    if "Supertrend 看多" in s: return 1.6 # 微调
-    if "Supertrend 看空" in s: return -1.6 # 微调
+    if "Supertrend 看多" in s: return 1.6
+    if "Supertrend 看空" in s: return -1.6
     
     if "站上云层" in s: return 1.5
     if "跌破云层" in s: return -1.5
@@ -147,7 +153,7 @@ def get_signal_score(s, regime="TREND"):
 
     # --- G. 基本面/择时 ---
     if "价值陷阱" in s: return 0.0 
-    if "黄金坑" in s: return 2.2 # 再次微调，确认戴维斯双击重要性
+    if "黄金坑" in s: return 2.2
     if "九转" in s: return 2.0 if "底部" in s else -2.0
     if "华尔街" in s: return 1.0 if "买入" in s else -1.0
     if "财报" in s: return 0.0
@@ -344,7 +350,7 @@ def get_daily_data_stable(ticker):
 # ================= 📈 V29.1 核心分析逻辑 =================
 def analyze_daily_signals(ticker):
     df = get_daily_data_stable(ticker)
-    if df is None or len(df) < 100: return None, None, None
+    if df is None or len(df) < 100: return None, None, None, None
     
     df.columns = [str(c).upper() for c in df.columns]
     signals = []
@@ -357,7 +363,7 @@ def analyze_daily_signals(ticker):
     df['VOL_MA_20'] = df.ta.sma(close='volume', length=20)
     df.ta.kc(length=20, scalar=2, append=True)
     df.ta.rsi(length=14, append=True)
-    df.ta.atr(length=14, append=True) # 必须计算 ATR
+    df.ta.atr(length=14, append=True)
     
     try: df.ta.cdl_pattern(name=["hammer", "morning_star"], append=True)
     except: pass
@@ -377,7 +383,7 @@ def analyze_daily_signals(ticker):
     # 0. 估值 & 财报
     signals.extend(get_valuation_and_earnings(ticker, price))
 
-    # 1. 趋势 (Trend)
+    # 1. 趋势
     st_cols = [c for c in df.columns if c.startswith('SUPERT')]
     st_col = st_cols[0] if st_cols else None
     is_bull = False
@@ -402,7 +408,7 @@ def analyze_daily_signals(ticker):
         if curr['AROONU_25'] > 70 and curr['AROOND_25'] < 30: signals.append("Aroon 强多")
         elif curr['AROOND_25'] > 70 and curr['AROONU_25'] < 30: signals.append("Aroon 强空")
 
-    # 2. 资金 (Volume)
+    # 2. 资金
     if 'CMF_20' in df.columns:
         cmf = curr['CMF_20']
         if cmf > 0.25: signals.append(f"CMF 机构满仓 (极强) [{cmf:.2f}]")
@@ -502,19 +508,14 @@ def analyze_daily_signals(ticker):
         elif sell_s == 9: signals.append("九转: 顶部卖出信号 [9]")
     except: pass
 
-    # 🛡️ 混合止损策略 (Hybrid Stop)
-    # 多头：Max(Supertrend * 0.985, Price - 2.8ATR) - 既不让利太多，又防ST滞后
-    # 空头：ATR Trailing - 简单有效
+    # 🛡️ 混合止损 (Hybrid Stop)
     atr = curr.get('ATRr_14', 0) if 'ATRr_14' in curr else curr.get('ATR_14', 0)
-    
     stop_loss_price = 0
     if atr > 0:
         if is_bull and st_col:
             st_val = curr[st_col]
-            # 如果当前价格在 ST 之上，启用混合止损
             stop_loss_price = max(st_val * 0.985, price - 2.8 * atr)
         else:
-            # 空头或无ST，使用 ATR 吊灯
             stop_loss_price = price + (2.8 * atr)
     
     return price, signals, market_regime, stop_loss_price
