@@ -16,22 +16,28 @@ import io
 import copy
 
 # ================= 🛠️ 系统配置 =================
+# 同时输出到文件和控制台，并强制刷新
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler("bot_v34_6.log"),
+        logging.FileHandler("bot_v35_0.log"),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+def force_log(msg):
+    """强制打印日志，确保在控制台可见"""
+    print(msg)
+    logger.info(msg)
 
 TOKEN = os.getenv('DISCORD_TOKEN') 
 CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0'))
 FMP_API_KEY = os.getenv('FMP_API_KEY') 
 
 BASE_PATH = "/data" if os.path.exists("/data") else "."
-DATA_FILE = os.path.join(BASE_PATH, "watchlist_v34.json")
+DATA_FILE = os.path.join(BASE_PATH, "watchlist_v35.json")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -57,26 +63,26 @@ SECTOR_MAP = {
 
 # ================= 📖 因子字典 =================
 FACTOR_COMMENTS = {
-    "Trend_Bull": "趋势多头排列 (x1.5)",
-    "Trend_Bear": "趋势回调，仅限极轻仓 (x0.8)", 
-    "Trend_Chop": "趋势震荡整理 (x0.9)",
-    "VSA_Lock": "缩量新高，主力锁仓 (x1.3)",
-    "VSA_Pump": "放量上涨，资金抢筹 (x1.2)",
-    "VSA_Churn": "放量滞涨，出货迹象 (x0.5)",
-    "VSA_Exit": "放量+买盘枯竭，机构派发 (x0.3)",
-    "VSA_Dump": "放量下跌，恐慌抛售 (x0.5)",
-    "VSA_Strong": "K线强势，机构护盘 (x1.1)",
-    "Fund_Fake": "真雷伪成长 (x0.0)",
-    "Fund_Growth": "成长中亏损，可极轻仓 (x0.9)", 
-    "Fund_Super": "超级成长+高毛利 (x1.25)",
-    "Fund_Good": "持续盈利，商业模式验证 (x1.1)",
-    "Fund_Cash": "高自由现金流，现金奶牛 (x1.3)",
-    "Sector_Hot": "板块强势，趋势共振 (x1.2)",
-    "Sector_Cold": "板块弱势，拖累个股 (x0.9)",
-    "Sector_Alpha": "逆势抗跌，独立行情 (x1.1)",
-    "Vol_High": "高波动率，自动降杠杆 (x0.7)",
-    "Regime_Bull": "系统性牛市",
-    "Regime_Bear": "系统性熊市",
+    "Trend_Bull": "趋势多头 (x1.5)",
+    "Trend_Bear": "趋势回调 (x0.8)", 
+    "Trend_Chop": "趋势震荡 (x0.9)",
+    "VSA_Lock": "缩量锁仓 (x1.3)",
+    "VSA_Pump": "放量抢筹 (x1.2)",
+    "VSA_Churn": "放量滞涨 (x0.5)",
+    "VSA_Exit": "机构派发 (x0.3)",
+    "VSA_Dump": "放量杀跌 (x0.5)",
+    "VSA_Strong": "机构护盘 (x1.1)",
+    "Fund_Fake": "伪成长雷 (x0.0)",
+    "Fund_Growth": "成长亏损 (x0.9)", 
+    "Fund_Super": "超级成长 (x1.25)",
+    "Fund_Good": "持续盈利 (x1.1)",
+    "Fund_Cash": "现金奶牛 (x1.3)",
+    "Sector_Hot": "板块爆发 (x1.2)",
+    "Sector_Cold": "板块拖累 (x0.9)",
+    "Sector_Alpha": "逆势抗跌 (x1.1)",
+    "Vol_High": "高波降杠 (x0.7)",
+    "Regime_Bull": "牛市",
+    "Regime_Bear": "熊市",
     "Regime_Panic": "VIX恐慌"
 }
 
@@ -100,19 +106,21 @@ def get_finviz_chart_url(ticker):
 
 def log_url(url, tag="API"):
     masked_url = url.replace(FMP_API_KEY, "******")
-    logger.info(f"[{tag}] Request: {masked_url}")
+    force_log(f"[{tag}] GET: {masked_url}")
 
 def get_market_regime_detailed():
     if not FMP_API_KEY: return None, None, "API缺失"
     spy_trend = "Neutral"; vix_level = 0
     try:
         vix_url = f"https://financialmodelingprep.com/stable/quote?symbol=^VIX&apikey={FMP_API_KEY}"
+        log_url(vix_url, "VIX")
         vix_resp = requests.get(vix_url, timeout=5).json()
         if vix_resp: 
             vix_level = vix_resp[0].get('price', 0)
-            logger.info(f"[FMP AUDIT] VIX Price: {vix_level}")
+            force_log(f"✅ [DATA] VIX Price: {vix_level}")
 
         spy_url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol=SPY&apikey={FMP_API_KEY}"
+        log_url(spy_url, "SPY")
         spy_resp = requests.get(spy_url, timeout=5)
         spy_data = pd.DataFrame(spy_resp.json()).iloc[:300].iloc[::-1]
         if spy_data['close'].iloc[-1] > spy_data['close'].rolling(200).mean().iloc[-1]:
@@ -120,24 +128,29 @@ def get_market_regime_detailed():
         else: spy_trend = "Bear"
         return spy_trend, vix_level, "获取成功"
     except Exception as e:
-        logger.error(f"[ERROR] Market Regime: {e}")
+        force_log(f"❌ [ERROR] Market Regime: {e}")
         return "Neutral", 20, f"失败: {e}"
 
 def get_sector_momentum(ticker):
     etf = SECTOR_MAP.get(ticker, "SPY") 
     today_str = datetime.datetime.now().strftime('%Y-%m-%d')
+    
+    # 查缓存 (但依然打印数据用于审计)
     if etf in api_cache_sector and api_cache_sector[etf]['date'] == today_str:
-        return api_cache_sector[etf]['ret_20d'], etf
+        ret = api_cache_sector[etf]['ret_20d']
+        force_log(f"✅ [CACHE] Sector {etf}: 20d_Ret={ret:.2%}")
+        return ret, etf
 
     if not FMP_API_KEY: return 0, etf
     try:
         url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={etf}&apikey={FMP_API_KEY}"
+        log_url(url, f"SEC_{etf}")
         resp = requests.get(url, timeout=5).json()
         df = pd.DataFrame(resp).iloc[:50]
         if len(df) > 20:
-            curr = df['close'].iloc[0]
-            prev_20 = df['close'].iloc[20]
+            curr = df['close'].iloc[0]; prev_20 = df['close'].iloc[20]
             ret_20d = (curr - prev_20) / prev_20
+            force_log(f"✅ [DATA] Sector {etf}: 20d_Ret={ret_20d:.2%}")
             api_cache_sector[etf] = {'date': today_str, 'ret_20d': ret_20d}
             return ret_20d, etf
     except: pass
@@ -146,25 +159,31 @@ def get_sector_momentum(ticker):
 def get_fundamentals_deep(ticker):
     if not FMP_API_KEY: return None
     today_str = datetime.datetime.now().strftime('%Y-%m-%d')
+    
     if ticker in api_cache_fund and api_cache_fund[ticker]['date'] == today_str:
-        return api_cache_fund[ticker]['data']
+        d = api_cache_fund[ticker]['data']
+        force_log(f"✅ [CACHE] {ticker} Fund: Growth={d.get('rev_growth')}, GM={d.get('gross_margin')}")
+        return d
 
     try:
         inc_url = f"https://financialmodelingprep.com/stable/income-statement?symbol={ticker}&limit=2&apikey={FMP_API_KEY}"
+        log_url(inc_url, "FUND_INC")
         inc_resp = requests.get(inc_url, timeout=5).json()
         ratio_url = f"https://financialmodelingprep.com/stable/ratios-ttm?symbol={ticker}&apikey={FMP_API_KEY}"
+        log_url(ratio_url, "FUND_RATIO")
         ratio_resp = requests.get(ratio_url, timeout=5).json()
         
         data = {}
         if inc_resp and len(inc_resp) >= 2:
-            curr_rev = inc_resp[0].get('revenue', 0)
-            prev_rev = inc_resp[1].get('revenue', 0)
+            curr_rev = inc_resp[0].get('revenue', 0); prev_rev = inc_resp[1].get('revenue', 0)
             data['rev_growth'] = (curr_rev - prev_rev) / prev_rev if prev_rev > 0 else 0
             data['eps'] = inc_resp[0].get('eps', 0)
+            force_log(f"✅ [DATA] {ticker} Income: Growth={data['rev_growth']:.2%}, EPS={data['eps']}")
         
         if ratio_resp:
             data['gross_margin'] = ratio_resp[0].get('grossProfitMarginTTM', 0.35)
             data['fcf_yield'] = ratio_resp[0].get('freeCashFlowYieldTTM', 0)
+            force_log(f"✅ [DATA] {ticker} Ratios: GM={data['gross_margin']:.2%}, FCF={data['fcf_yield']:.2%}")
             
         api_cache_fund[ticker] = {'date': today_str, 'data': data}
         return data
@@ -173,21 +192,29 @@ def get_fundamentals_deep(ticker):
 def get_daily_data_stable(ticker):
     if not FMP_API_KEY: return None, None
     today_str = datetime.datetime.now().strftime('%Y-%m-%d')
+    
     if ticker in api_cache_daily and api_cache_daily[ticker]['date'] == today_str:
-        return api_cache_daily[ticker]['df'].copy(), api_cache_daily[ticker]['quote']
+        q = api_cache_daily[ticker]['quote']
+        force_log(f"✅ [CACHE] {ticker} Quote: Price={q['price']}, Vol={q['volume']}")
+        return api_cache_daily[ticker]['df'].copy(), q
 
     try:
         hist_url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={ticker}&apikey={FMP_API_KEY}"
+        log_url(hist_url, "HIST")
         df = pd.DataFrame(requests.get(hist_url, timeout=10).json())
         df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
         df['date'] = pd.to_datetime(df['date']); df.sort_values(by='date', ascending=True, inplace=True)
         
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
+        log_url(quote_url, "QUOTE")
         curr_quote = requests.get(quote_url, timeout=5).json()[0]
         
-        if 'upVolume' in curr_quote and (curr_quote['upVolume'] == 'N/A' or curr_quote['upVolume'] is None):
-            curr_quote['upVolume'] = None
-            curr_quote['downVolume'] = None
+        # 审计 VSA 数据
+        uv = curr_quote.get('upVolume'); dv = curr_quote.get('downVolume')
+        force_log(f"✅ [DATA] {ticker} Realtime: Price={curr_quote['price']}, UpVol={uv}, DownVol={dv}")
+        
+        if uv == 'N/A' or uv is None:
+            curr_quote['upVolume'] = None; curr_quote['downVolume'] = None
         
         last_hist_date = df['date'].iloc[-1].strftime('%Y-%m-%d')
         if last_hist_date == today_str:
@@ -206,17 +233,17 @@ def get_daily_data_stable(ticker):
         return df, curr_quote
     except: return None, None
 
-# ================= 🧠 V34.6 引擎 =================
+# ================= 🧠 V35.0 雷神引擎 =================
 
-def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, ticker):
+def calculate_v35_score(df, quote_data, fundamentals, spy_trend, vix_level, ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; price = curr['CLOSE']
     
     # 1. 动态基准分
     base_score = 3.0; regime_msg = ""
     if spy_trend == "Bull": base_score = 3.5; regime_msg = "牛市"
     elif spy_trend == "Bear": base_score = 2.5; regime_msg = "熊市"
-    if vix_level > 25: base_score -= 0.5; regime_msg = f"恐慌 (VIX:{vix_level:.1f})"
-    if vix_level > 35: base_score = 1.5; regime_msg = f"崩盘 (VIX:{vix_level:.1f})"
+    if vix_level > 25: base_score -= 0.5; regime_msg = f"恐慌({vix_level:.0f})"
+    if vix_level > 35: base_score = 1.5; regime_msg = f"崩盘({vix_level:.0f})"
     base_score = max(1.5, base_score)
 
     # 2. 趋势
@@ -252,8 +279,8 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     else:
         range_len = curr['HIGH'] - curr['LOW']
         clv = (curr['CLOSE'] - curr['LOW']) / range_len if range_len > 0 else 0.5
-        if rvol > 1.5 and price_change > 0.02 and clv > 0.7: vsa_score = 1.2; vsa_msg = f"{FACTOR_COMMENTS['VSA_Pump']} (K线)"
-        elif rvol > 1.5 and clv < 0.3: vsa_score = 0.5; vsa_msg = f"{FACTOR_COMMENTS['VSA_Dump']} (K线)"
+        if rvol > 1.5 and price_change > 0.02 and clv > 0.7: vsa_score = 1.2; vsa_msg = f"{FACTOR_COMMENTS['VSA_Pump']}"
+        elif rvol > 1.5 and clv < 0.3: vsa_score = 0.5; vsa_msg = f"{FACTOR_COMMENTS['VSA_Dump']}"
         elif rvol > 1.0 and price_change > 0 and clv > 0.8: vsa_score = 1.1; vsa_msg = f"{FACTOR_COMMENTS['VSA_Strong']}"
 
     # 4. 基本面
@@ -280,12 +307,12 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     sector_ret, etf_name = get_sector_momentum(ticker)
     sector_score = 1.0; sector_msg = ""
     if sector_ret > 0.05: 
-        sector_score = 1.2; sector_msg = f"{FACTOR_COMMENTS['Sector_Hot']} ({etf_name}: +{sector_ret*100:.1f}%)"
+        sector_score = 1.2; sector_msg = f"{FACTOR_COMMENTS['Sector_Hot']} ({etf_name})"
     elif sector_ret < -0.02: 
         if trend_score >= 1.3:
-            sector_score = 1.1; sector_msg = f"{FACTOR_COMMENTS['Sector_Alpha']} ({etf_name}: {sector_ret*100:.1f}%)"
+            sector_score = 1.1; sector_msg = f"{FACTOR_COMMENTS['Sector_Alpha']} ({etf_name})"
         else:
-            sector_score = 0.9; sector_msg = f"{FACTOR_COMMENTS['Sector_Cold']} ({etf_name}: {sector_ret*100:.1f}%)"
+            sector_score = 0.9; sector_msg = f"{FACTOR_COMMENTS['Sector_Cold']} ({etf_name})"
 
     # 6. 波动率
     atr = df.ta.atr(length=14).iloc[-1]
@@ -294,7 +321,7 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     if atr_pct > 0.06: vol_score = 0.7; vol_msg = f"{FACTOR_COMMENTS['Vol_High']}"
 
     final_score = base_score * trend_score * vsa_score * fund_score * vol_score * sector_score
-    logger.info(f"[SCORE AUDIT] {ticker}: {final_score:.2f}")
+    force_log(f"🧮 [CALC] {ticker}: {base_score}*{trend_score}*{vsa_score}*{fund_score}*{sector_score}*{vol_score} = {final_score:.2f}")
     
     special_signals = []
     try:
@@ -327,16 +354,30 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     
     return final_score, special_signals, chandelier_stop, atr_pct, trend_msg, vsa_msg, fund_msg, sector_msg, regime_msg, vol_msg, debug_formula
 
+# 🔥 V35.0 暴力仓位修正
 def calculate_position_size(atr_pct, final_score):
-    if final_score < 2.0: return "空仓/观望"
-    risk_per_trade = 0.005
-    stop_distance_pct = 3 * atr_pct
+    if final_score < 4.0: return "空仓/观望"
+    
+    # 动态风险预算 (Violence)
+    if final_score >= 9.0:
+        risk_per_trade = 0.030 # 3.0% 风险 (神票敢死队)
+        stop_mult = 1.5        # 止损极窄
+    elif final_score >= 7.0:
+        risk_per_trade = 0.015 # 1.5% 风险
+        stop_mult = 2.0
+    else:
+        risk_per_trade = 0.010 # 1.0% 风险
+        stop_mult = 2.0
+        
+    stop_distance_pct = stop_mult * atr_pct
     if stop_distance_pct <= 0.001: return "0%"
+    
     position_size = risk_per_trade / stop_distance_pct
-    pos_pct = min(position_size * 100 * min(final_score / 6.0, 1.0), 35)
+    pos_pct = min(position_size * 100, 50) # 50% 封顶
+    
     return f"{int(pos_pct)}%"
 
-# 🔥 四字评价 + 战术后缀
+# 极简点评
 def get_short_comment(score, trend_msg):
     if score >= 9.5: return "极值共振"
     if score >= 7.5: return "多头主升"
@@ -344,15 +385,9 @@ def get_short_comment(score, trend_msg):
     if score >= 4.0: return "震荡蓄势"
     return "空头压制"
 
-def get_pos_comment(score):
-    if score >= 9.0: return "重仓出击"
-    if score >= 7.0: return "顺势加仓"
-    if score >= 4.0: return "轻仓试错"
-    return "空仓观望"
-
 # ================= Bot 指令 =================
 
-@bot.tree.command(name="check", description="V34.6 战术指令版")
+@bot.tree.command(name="check", description="V35.0 终极雷神版")
 async def check_stocks(interaction: discord.Interaction, ticker: str):
     if not interaction.response.is_done(): await interaction.response.defer()
     t = ticker.split()[0].replace(',', '').upper()
@@ -364,11 +399,10 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
         if df is None: return await interaction.followup.send(f"❌ 数据失败: {t}")
         fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
         
-        score, specials, chandelier, atr_pct, t_msg, v_msg, f_msg, s_msg, r_msg, vl_msg, formula = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
+        score, specials, chandelier, atr_pct, t_msg, v_msg, f_msg, s_msg, r_msg, vl_msg, formula = calculate_v35_score(df, quote, fund, spy_trend, vix_level, t)
         
         price = df['CLOSE'].iloc[-1]
         pos_advice = calculate_position_size(atr_pct, score)
-        pos_comment = get_pos_comment(score) # 获取战术后缀
         short_comm = get_short_comment(score, t_msg)
         
         color = discord.Color.light_grey()
@@ -380,17 +414,17 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
         star_count = int(round(score))
         stars = "⭐" * star_count if star_count > 0 else "⚫"
 
-        embed = discord.Embed(title=f"{t} 【{short_comm}】 {score:.1f}分 {stars}", color=color)
+        embed = discord.Embed(title=f"{t}: {short_comm} ({score:.1f}分) {stars}", color=color)
         
-        status_str = "多头趋势" if "多头" in t_msg else "空头趋势" if "空头" in t_msg else "震荡"
-        vol_str = "高波动" if "高波" in vl_msg else "正常"
+        status_str = "多头" if "多头" in t_msg else "空头" if "空头" in t_msg else "震荡"
+        vol_str = "高波" if "高波" in vl_msg else "稳健"
         desc = f"**现价**: ${price:.2f}\n"
         desc += f"**环境**: {r_msg} | **状态**: {status_str} ({vol_str})\n"
-        desc += f"**算法**: `{formula}`\n" # 算式 -> 算法
-        desc += f"**仓位**: `{pos_advice}` ({pos_comment})\n" # 增加战术后缀
+        desc += f"**算法**: `{formula}`\n"
+        desc += f"**仓位**: `{pos_advice}`\n"
         
-        if "禁止" in t_msg: desc += f"**趋势警告**: 🚫 已跌破长期均线，禁止做多\n"
-        desc += f"**多头止损**: `${chandelier:.2f}` (跌破即跑)\n"
+        if "禁止" in t_msg: desc += f"**警告**: 🚫 跌破趋势线，禁止做多\n"
+        desc += f"**止损**: `${chandelier:.2f}` (跌破即跑)\n"
         
         embed.description = desc
         
@@ -406,12 +440,13 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
             spec_str = "\n".join([f"> {s}" for s in specials])
             embed.add_field(name="绝密信号", value=spec_str, inline=False)
 
-        conc_val = "👀 观望为主，此时入场胜率极低，建议耐心等待信号明确。"
-        if score >= 9.5: conc_val = "🔥 **千载难逢的击球点**：多重因子完美共振，机构建仓完毕。建议重仓出击，设好防守，坐等主升浪！"
-        elif score >= 7.5: conc_val = "💎 **强势主升浪**：资金持续流入，形态完好。建议顺势加仓，沿均线持有。"
-        elif score >= 6.0: conc_val = "✅ **右侧建仓良机**：虽然板块稍弱，但个股走出独立行情。建议分批入场，回踩均线加仓。"
-        elif score >= 4.0: conc_val = "🤔 **鸡肋行情**：多空分歧较大，缺乏明确合力。仅适合老手轻仓博弈。"
-        elif score < 2.0: conc_val = "⚠️ **危墙之下**：空头排列成型，主力出逃。切勿接飞刀，建议清仓观察！"
+        # 🔥 15字内极简结论
+        conc_val = "观望为主，等待信号。"
+        if score >= 9.5: conc_val = "🔥 核武器启动，建议重仓死拿！"
+        elif score >= 7.5: conc_val = "💎 主升浪中，顺势加仓持有。"
+        elif score >= 6.0: conc_val = "✅ 独立行情，分批建仓买入。"
+        elif score >= 4.0: conc_val = "🤔 震荡磨盘，轻仓博弈为主。"
+        elif score < 2.0: conc_val = "⚠️ 趋势崩坏，立即清仓离场！"
         
         embed.add_field(name="机构结论", value=f"> {conc_val}", inline=False)
 
@@ -440,12 +475,12 @@ async def list_stocks(interaction: discord.Interaction):
         df, quote = await loop.run_in_executor(None, get_daily_data_stable, t)
         if df is None: continue
         fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
-        score, specials, _, _, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
+        score, specials, _, _, _, _, _, _, _, _, _ = calculate_v35_score(df, quote, fund, spy_trend, vix_level, t)
         icon = "🔥" if score > 7 else "💀" if score < 4 else "⚖️"
         if any("冰点" in s for s in specials): icon = "🧊"
         lines.append(f"**{t}**: `{score:.1f}` {icon}")
     
-    embed = discord.Embed(title="📊 V34.6 机构看板", description="\n".join(lines), color=discord.Color.blue())
+    embed = discord.Embed(title="📊 V35.0 机构看板", description="\n".join(lines), color=discord.Color.blue())
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="add", description="添加")
@@ -479,7 +514,7 @@ async def daily_monitor():
             df, quote = await loop.run_in_executor(None, get_daily_data_stable, t)
             if df is None: continue
             fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
-            score, specials, stop, atr_pct, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
+            score, specials, stop, atr_pct, _, _, _, _, _, _, _ = calculate_v35_score(df, quote, fund, spy_trend, vix_level, t)
             
             if score >= 7.0 or score < 4.0 or specials:
                 price = df['CLOSE'].iloc[-1]
@@ -489,7 +524,7 @@ async def daily_monitor():
                 summary_lines.append(f"{icon} **{t}** ({score:.1f}): ${price:.2f}{spec_str}")
 
         if summary_lines:
-            msg = f"📊 <@{uid}> **V34.6 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
+            msg = f"📊 <@{uid}> **V35.0 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
             await channel.send(msg[:1900])
             await asyncio.sleep(1)
 
@@ -506,7 +541,7 @@ async def premarket_alert():
             df, quote = await loop.run_in_executor(None, get_daily_data_stable, t)
             if df is None: continue
             fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
-            score, specials, _, _, _, _, _, _, _, _, _ = calculate_v34_score(df, quote, fund, spy_trend, vix_level, t)
+            score, specials, _, _, _, _, _, _, _, _, _ = calculate_v35_score(df, quote, fund, spy_trend, vix_level, t)
             if specials:
                 price = df['CLOSE'].iloc[-1]
                 pre_alerts.append(f"☢️ **{t}**: ${price:.2f} | {' '.join(specials)}")
@@ -518,7 +553,7 @@ async def premarket_alert():
 async def on_ready():
     load_data()
     api_cache_daily.clear(); api_cache_fund.clear(); api_cache_sector.clear()
-    logger.info("✅ V34.6 Tactical Command Edition Started.")
+    logger.info("✅ V35.0 Thor Edition (Force Log + Fix Sizing) Started.")
     await bot.tree.sync()
     daily_monitor.start()
     premarket_alert.start()
