@@ -19,7 +19,7 @@ import copy
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.FileHandler("bot_v32_3.log"), logging.StreamHandler()]
+    handlers=[logging.FileHandler("bot_v32_4.log"), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -35,30 +35,20 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 watch_data = {}
-# 缓存池
 api_cache_daily = {}
 api_cache_fund = {}
-api_cache_sector = {} # 板块数据缓存
+api_cache_sector = {} 
 
-# ================= 🗺️ 板块映射 (Sector Map) =================
-# 机构常用的 ETF 代理
+# ================= 🗺️ 板块映射 =================
 SECTOR_MAP = {
-    # 半导体
     "NVDA": "SMH", "AMD": "SMH", "AVGO": "SMH", "TSM": "SMH", "QCOM": "SMH", "MU": "SMH", "INTC": "SMH", "AMAT": "SMH", "LRCX": "SMH",
-    # 科技巨头 (XLK/XLC)
     "AAPL": "XLK", "MSFT": "XLK", "ORCL": "XLK", "ADBE": "XLK", "CRM": "XLK",
     "GOOG": "XLC", "GOOGL": "XLC", "META": "XLC", "NFLX": "XLC", "DIS": "XLC",
-    # 可选消费 (XLY)
     "TSLA": "XLY", "AMZN": "XLY", "HD": "XLY", "MCD": "XLY", "NKE": "XLY", "SBUX": "XLY",
-    # 金融 (XLF)
     "JPM": "XLF", "BAC": "XLF", "V": "XLF", "MA": "XLF", "BRK.B": "XLF",
-    # 医疗 (XLV)
     "LLY": "XLV", "UNH": "XLV", "JNJ": "XLV", "PFE": "XLV",
-    # 能源 (XLE)
     "XOM": "XLE", "CVX": "XLE",
-    # 生物科技 (XBI)
     "LABU": "XBI", "XBI": "XBI",
-    # 比特币相关 (IBIT)
     "MSTR": "IBIT", "COIN": "IBIT", "MARA": "IBIT", "IBIT": "IBIT"
 }
 
@@ -97,7 +87,6 @@ def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
-# --- 宏观环境 ---
 def get_market_regime_detailed():
     if not FMP_API_KEY: return None, None, "API缺失"
     spy_trend = "Neutral"; vix_level = 0
@@ -115,12 +104,9 @@ def get_market_regime_detailed():
         return spy_trend, vix_level, "获取成功"
     except: return "Neutral", 20, "失败"
 
-# --- ⚡ 第一刀：板块热度获取 ---
 def get_sector_momentum(ticker):
-    etf = SECTOR_MAP.get(ticker, "SPY") # 默认对比 SPY
+    etf = SECTOR_MAP.get(ticker, "SPY") 
     today_str = datetime.datetime.now().strftime('%Y-%m-%d')
-    
-    # 查缓存
     if etf in api_cache_sector and api_cache_sector[etf]['date'] == today_str:
         return api_cache_sector[etf]['ret_20d'], etf
 
@@ -128,20 +114,16 @@ def get_sector_momentum(ticker):
     try:
         url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={etf}&apikey={FMP_API_KEY}"
         resp = requests.get(url, timeout=5).json()
-        df = pd.DataFrame(resp).iloc[:50] # 只需要最近的数据
+        df = pd.DataFrame(resp).iloc[:50]
         if len(df) > 20:
-            # 计算20日涨幅
-            curr = df['close'].iloc[0] # FMP 历史数据通常是倒序，0是最新
+            curr = df['close'].iloc[0]
             prev_20 = df['close'].iloc[20]
             ret_20d = (curr - prev_20) / prev_20
-            
-            # 写入缓存
             api_cache_sector[etf] = {'date': today_str, 'ret_20d': ret_20d}
             return ret_20d, etf
     except: pass
     return 0, etf
 
-# --- ⚡ 第二刀：深度基本面获取 ---
 def get_fundamentals_deep(ticker):
     if not FMP_API_KEY: return None
     today_str = datetime.datetime.now().strftime('%Y-%m-%d')
@@ -149,11 +131,8 @@ def get_fundamentals_deep(ticker):
         return api_cache_fund[ticker]['data']
 
     try:
-        # 1. 损益表 (EPS, Revenue)
         inc_url = f"https://financialmodelingprep.com/stable/income-statement?symbol={ticker}&limit=2&apikey={FMP_API_KEY}"
         inc_resp = requests.get(inc_url, timeout=5).json()
-        
-        # 2. 核心指标 (Gross Margin, FCF Yield)
         ratio_url = f"https://financialmodelingprep.com/stable/ratios-ttm?symbol={ticker}&apikey={FMP_API_KEY}"
         ratio_resp = requests.get(ratio_url, timeout=5).json()
         
@@ -198,13 +177,18 @@ def get_daily_data_stable(ticker):
         df.drop_duplicates(subset=['date'], keep='last', inplace=True)
         df.set_index('date', inplace=True)
         df.columns = [str(c).upper() for c in df.columns]
-        df.fillna(method='ffill', inplace=True); df.fillna(0, inplace=True)
+        
+        # 🔥 修复：替换过时的 fillna(method='ffill')
+        # 旧代码：df.fillna(method='ffill', inplace=True); df.fillna(0, inplace=True)
+        # 新代码：
+        df = df.ffill()
+        df = df.fillna(0)
         
         api_cache_daily[ticker] = {'date': today_str, 'df': df, 'quote': curr_quote}
         return df, curr_quote
     except: return None, None
 
-# ================= 🧠 V32.3 怪兽引擎 =================
+# ================= 🧠 V32.4 怪兽引擎 =================
 
 def calculate_v32_score(df, quote_data, fundamentals, spy_trend, vix_level, ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; price = curr['CLOSE']
@@ -243,7 +227,7 @@ def calculate_v32_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
         elif price_change < -0.02: vsa_score = 0.5; vsa_msg = "📉 VSA_Dump (x0.5)"
     elif rvol < 0.7 and price > df['HIGH'].iloc[-21:-1].max(): vsa_score = 1.3; vsa_msg = "🔒 VSA_Lock (x1.3)"
 
-    # ⚡ 4. 深度基本面 (The Fundamental Cut)
+    # 4. 深度基本面
     fund_score = 1.0; fund_msg = ""
     if fundamentals:
         eps = fundamentals.get('eps', 0)
@@ -252,30 +236,24 @@ def calculate_v32_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
         fcf_yield = fundamentals.get('fcf_yield', 0)
         
         if eps < 0:
-            # 杀伪成长：亏损且 (营收增长慢 或 毛利极低)
             if rev_growth < 0.20 or gross_margin < 0.40:
                 fund_score = 0.0 
                 fund_msg = "☠️ Fund_Fake:伪成长/毛利低 (x0.0)"
             else:
                 fund_score = 0.9
                 fund_msg = f"🦄 Fund_Growth:激进 (x0.9)"
-        elif fcf_yield > 0.05: # 现金奶牛
+        elif fcf_yield > 0.05:
             fund_score = 1.3
             fund_msg = f"💰 Fund_Cash:现金奶牛 (x1.3)"
         else:
             fund_score = 1.1
             fund_msg = "💰 Fund_Good:盈利 (x1.1)"
 
-    # ⚡ 5. 板块热度 (The Sector Cut)
+    # 5. 板块热度
     sector_ret, etf_name = get_sector_momentum(ticker)
     sector_score = 1.0; sector_msg = ""
-    
-    if sector_ret > 0.05: # 板块月涨幅 > 5%
-        sector_score = 1.2
-        sector_msg = f"🔥 Sector_Hot: {etf_name} +{sector_ret*100:.1f}% (x1.2)"
-    elif sector_ret < -0.02: # 板块转弱
-        sector_score = 0.9
-        sector_msg = f"❄️ Sector_Cold: {etf_name} {sector_ret*100:.1f}% (x0.9)"
+    if sector_ret > 0.05: sector_score = 1.2; sector_msg = f"🔥 Sector_Hot: {etf_name} +{sector_ret*100:.1f}% (x1.2)"
+    elif sector_ret < -0.02: sector_score = 0.9; sector_msg = f"❄️ Sector_Cold: {etf_name} {sector_ret*100:.1f}% (x0.9)"
 
     # 6. 波动率
     atr = df.ta.atr(length=14).iloc[-1]
@@ -327,7 +305,7 @@ def calculate_position_size(atr_pct, final_score):
 
 # ================= Bot 指令 =================
 
-@bot.tree.command(name="check", description="V32.3 终极怪兽版")
+@bot.tree.command(name="check", description="V32.4 终极怪兽版")
 async def check_stocks(interaction: discord.Interaction, ticker: str):
     await interaction.response.defer()
     t = ticker.split()[0].replace(',', '').upper()
@@ -338,7 +316,6 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
     if df is None: return await interaction.followup.send(f"❌ 数据失败: {t}")
     fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
     
-    # 计算
     score, specials, chandelier, atr_pct, t_msg, v_msg, f_msg, s_msg, r_msg, formula = calculate_v32_score(df, quote, fund, spy_trend, vix_level, t)
     
     price = df['CLOSE'].iloc[-1]
@@ -366,21 +343,17 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
     if s_msg: desc += f"> {s_msg}\n"
     if v_msg: desc += f"> {v_msg}\n"
     if f_msg: desc += f"> {f_msg}\n"
-    
     if specials:
         desc += "\n**☢️ 绝密信号:**\n"
         for s in specials: desc += f"> {s}\n"
 
     ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
-    embed = discord.Embed(title=f"{t} 机构怪兽 (V32.3)", description=f"现价: ${price:.2f}\n{desc}", color=color)
+    embed = discord.Embed(title=f"{t} 机构怪兽 (V32.4)", description=f"现价: ${price:.2f}\n{desc}", color=color)
     embed.set_image(url=get_finviz_chart_url(t))
     embed.add_field(name=conc_title, value=conc_val, inline=False)
     embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
     
     await interaction.followup.send(embed=embed)
-
-# (List, Export, Add, Remove, Tasks 代码逻辑同 V32.2，此处为节省篇幅省略，部署时请保留)
-# 只需将 calculate_v32_score 调用中的函数名更新，并传入 ticker 参数即可。
 
 @bot.tree.command(name="list", description="扫描观察池")
 async def list_stocks(interaction: discord.Interaction):
@@ -397,15 +370,29 @@ async def list_stocks(interaction: discord.Interaction):
         df, quote = await loop.run_in_executor(None, get_daily_data_stable, t)
         if df is None: continue
         fund = await loop.run_in_executor(None, get_fundamentals_deep, t)
-        # 注意：这里 calculate_v32_score 需要传入 ticker (t) 来查询板块
         score, specials, _, _, _, _, _, _, _, _ = calculate_v32_score(df, quote, fund, spy_trend, vix_level, t)
-        
         icon = "🔥" if score > 7 else "💀" if score < 2 else "⚖️"
         if any("冰点" in s for s in specials): icon = "🧊"
         lines.append(f"**{t}**: `{score:.1f}` {icon}")
     
-    embed = discord.Embed(title="📊 V32.3 怪兽监控", description="\n".join(lines), color=discord.Color.blue())
+    embed = discord.Embed(title="📊 V32.4 怪兽监控", description="\n".join(lines), color=discord.Color.blue())
     await interaction.followup.send(embed=embed)
+
+@bot.tree.command(name="add", description="添加")
+async def add_stock(interaction: discord.Interaction, ticker: str):
+    user_id = str(interaction.user.id)
+    if user_id not in watch_data: watch_data[user_id] = {}
+    for t in ticker.upper().replace(',', ' ').split(): watch_data[user_id][t] = {}
+    save_data()
+    await interaction.response.send_message(f"✅")
+
+@bot.tree.command(name="remove", description="删除")
+async def remove_stock(interaction: discord.Interaction, ticker: str):
+    user_id = str(interaction.user.id)
+    if user_id in watch_data and ticker.upper() in watch_data[user_id]:
+        del watch_data[user_id][ticker.upper()]
+        save_data()
+        await interaction.response.send_message(f"🗑️")
 
 @tasks.loop(time=datetime.time(hour=16, minute=15, tzinfo=pytz.timezone('America/New_York')))
 async def daily_monitor():
@@ -432,7 +419,7 @@ async def daily_monitor():
                 summary_lines.append(f"{icon} **{t}** ({score:.1f}): ${price:.2f}{spec_str}")
 
         if summary_lines:
-            msg = f"📊 <@{uid}> **V32.3 每日怪兽简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
+            msg = f"📊 <@{uid}> **V32.4 每日怪兽简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
             await channel.send(msg[:1900])
             await asyncio.sleep(1)
 
@@ -442,8 +429,7 @@ async def premarket_alert():
     if not channel: return
     loop = asyncio.get_running_loop()
     spy_trend, vix_level, _ = await loop.run_in_executor(None, get_market_regime_detailed)
-    api_cache_daily.clear() # 盘前刷新
-    
+    api_cache_daily.clear()
     for uid, stocks in watch_data.items():
         pre_alerts = []
         for t in list(stocks.keys()):
@@ -454,32 +440,15 @@ async def premarket_alert():
             if specials:
                 price = df['CLOSE'].iloc[-1]
                 pre_alerts.append(f"☢️ **{t}**: ${price:.2f} | {' '.join(specials)}")
-        
         if pre_alerts:
             ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
             await channel.send(f"🌅 <@{uid}> **盘前绝密情报** ({ny_time}):\n" + "\n".join(pre_alerts))
-
-@bot.tree.command(name="add", description="添加")
-async def add_stock(interaction: discord.Interaction, ticker: str):
-    user_id = str(interaction.user.id)
-    if user_id not in watch_data: watch_data[user_id] = {}
-    for t in ticker.upper().replace(',', ' ').split(): watch_data[user_id][t] = {}
-    save_data()
-    await interaction.response.send_message(f"✅")
-
-@bot.tree.command(name="remove", description="删除")
-async def remove_stock(interaction: discord.Interaction, ticker: str):
-    user_id = str(interaction.user.id)
-    if user_id in watch_data and ticker.upper() in watch_data[user_id]:
-        del watch_data[user_id][ticker.upper()]
-        save_data()
-        await interaction.response.send_message(f"🗑️")
 
 @bot.event
 async def on_ready():
     load_data()
     api_cache_daily.clear(); api_cache_fund.clear(); api_cache_sector.clear()
-    logger.info("✅ V32.3 Monster Alpha (Sector + Deep Fund) Started.")
+    logger.info("✅ V32.4 Monster Alpha (Stable Pandas) Started.")
     await bot.tree.sync()
     daily_monitor.start()
     premarket_alert.start()
