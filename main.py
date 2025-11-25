@@ -83,17 +83,24 @@ def get_comment(raw_text):
         if key in raw_text: return comment
     return ""
 
-# ================= 数据存取 =================
+# ================= 数据存取 (已修复语法错误) =================
 def load_data():
     global watch_data
     if os.path.exists(DATA_FILE):
-        try: with open(DATA_FILE, 'r') as f: watch_data = json.load(f)
-        except: watch_data = {}
-    else: save_data()
+        try:
+            with open(DATA_FILE, 'r') as f:
+                watch_data = json.load(f)
+        except:
+            watch_data = {}
+    else:
+        save_data()
 
 def save_data():
-    try: with open(DATA_FILE, 'w') as f: json.dump(watch_data, f, indent=4)
-    except: pass
+    try:
+        with open(DATA_FILE, 'w') as f:
+            json.dump(watch_data, f, indent=4)
+    except:
+        pass
 
 # ================= 🛡️ V28.1 机构精核评分 (Regime Scoring) =================
 def get_signal_score(s, regime="TREND"):
