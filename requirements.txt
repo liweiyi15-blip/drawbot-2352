@@ -1,5 +1,7 @@
-discord.py
-requests
-pandas
-pytz
-pandas_ta
+discord.py>=2.3.0
+pandas>=2.0.0
+pandas_ta>=0.3.14b0
+numpy>=1.24.0
+requests>=2.31.0
+python-dateutil>=2.8.2
+pytz>=2023.3
