@@ -28,7 +28,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 watch_data = {}
 
-# ================= 📖 战法说明书 (补全版) =================
+# ================= 📖 战法说明书 =================
 SIGNAL_COMMENTS = {
     # --- 资金 (最强权重) ---
     "机构满仓": "主力资金不计成本抢筹，主升浪特征。",
@@ -37,8 +37,9 @@ SIGNAL_COMMENTS = {
     "主力派发": "股价上涨但资金流出，典型的诱多。",
     "爆量抢筹": "巨量阳线，多头情绪宣泄，强力买入。",
     "爆量出货": "巨量阴线，恐慌盘与主力砸盘共振。",
-    "放量大涨": "量价齐升，健康的上涨形态。",
-    "放量杀跌": "恐慌盘涌出，承接无力。",
+    "放量大涨": "量价齐升，主力资金入场扫货。",
+    "放量杀跌": "恐慌盘涌出，承接无力，趋势破坏。",
+    "放量滞涨": "量大不涨，主力可能在高位出货。",
     
     # --- 趋势 (中等权重) ---
     "Supertrend 看多": "站稳趋势线，右侧持仓信号。",
@@ -48,31 +49,27 @@ SIGNAL_COMMENTS = {
     "站上云层": "多头突破长期阻力，阻力变支撑。",
     "跌破云层": "长期支撑失效，下方空间打开。",
     "Aroon 强多": "多头完全主导市场，单边行情。",
-    "Aroon 强空": "空头完全主导市场，加速下跌。",
-
+    
     # --- 动能 & 结构 ---
     "通道有效突破": "Keltner通道被强力突破，波动率爆发。",
     "通道有效跌破": "Keltner通道向下击穿，主跌浪加速。",
     "ADX 多头加速": "多头趋势强度持续增强，顺势加仓。",
-    "ADX 空头加速": "空头趋势强度持续增强，切勿抄底。",
     
     # --- 形态/反转 (左侧交易) ---
     "三线打击": "大阳线吞没连续阴线，暴力反转信号。",
     "双底结构": "W底形态构筑完成，颈线突破。",
     "双顶": "M头形态确立，上方压力沉重。",
     "RSI 底背离": "价格新低但动能衰竭，反弹一触即发。",
-    "RSI 顶背离": "价格新高但动能不足，见顶风险。",
     "黄金坑": "戴维斯双击：高盈利增长+历史低估值。",
     "九转": "情绪达到极值，大概率发生变盘。",
     "锤子线": "低位长下影线，资金尝试承接。",
     "早晨之星": "经典的底部K线组合，黎明前的黑暗。",
     "恐慌极值": "RSI极度超卖+放量，往往是带血的筹码。",
     
-    # --- 风险提示 ---
-    "价值陷阱": "公司亏损 (EPS<0)，估值指标失效。",
-    "财报": "财报窗口期波动剧烈，不确定性极高。",
-    "RSI 超买": "短期情绪过热，随时可能回调。",
-    "RSI 超卖": "短期跌幅过大，存在反抽需求。"
+    # --- 基本面 ---
+    "尚未盈利": "处于成长/烧钱阶段，关注现金流与营收。",
+    "价值陷阱": "基本面恶化，且技术面破位。",
+    "财报": "财报窗口期波动剧烈，不确定性极高。"
 }
 
 def get_comment(raw_text):
@@ -99,24 +96,20 @@ def save_data():
     except:
         pass
 
-# ================= 🛡️ V29.3 机构精密评分模型 =================
-# 改动：使用更精细的小数评分，反映机构对不同信号的信心差异
+# ================= 🛡️ V29.5 评分逻辑 =================
 def get_signal_score(s, regime="TREND"):
     s = s.strip()
     
-    # --- A. 0分/特殊提示 ---
     if "💡" in s: return 0.0 
 
-    # --- 🔥 核心驱动 (Smart Money) ---
-    # 资金流向是机构最看重的，给予最高权重
-    if "CMF" in s and "机构满仓" in s: return 3.5  # 满仓是极强信号
+    # --- 🔥 核心驱动 ---
+    if "CMF" in s and "机构满仓" in s: return 3.5 
     if "CMF" in s and "机构抛售" in s: return -3.5
     
-    if "爆量抢筹" in s: return 2.8  # 真金白银进场
-    if "爆量出货" in s: return -3.2 # 巨量砸盘通常比买入更可怕
+    if "爆量抢筹" in s: return 2.8
+    if "爆量出货" in s: return -3.2
 
-    # --- 📈 趋势结构 (Trend Structure) ---
-    # 一目均衡表和通道突破代表趋势的质变
+    # --- 📈 趋势结构 ---
     if "云上金叉" in s: return 3.2
     if "云下死叉" in s: return -3.2
     if "双底结构" in s: return 2.6
@@ -124,19 +117,19 @@ def get_signal_score(s, regime="TREND"):
     if "通道有效突破" in s: return 1.8
     if "通道有效跌破" in s: return -1.8
 
-    # --- 💰 资金博弈 (Flow) ---
+    # --- 💰 资金博弈 (修正量能权重) ---
     if "CMF" in s:
         if "主力吸筹" in s: return 1.6
         if "主力派发" in s: return -1.6
     
     if "量" in s:
-        if "放量大涨" in s: return 1.3
-        if "放量杀跌" in s: return -1.8 # 下跌放量很危险
-        if "缩量上涨" in s: return -0.8 # 量价背离，减分
-        if "缩量回调" in s: return 0.4  # 良性回调
+        if "放量大涨" in s: return 1.5
+        if "放量杀跌" in s: return -2.0 # 杀跌比大涨更严重
+        if "放量滞涨" in s: return -0.5 # 警惕信号
+        if "缩量上涨" in s: return -0.5
+        if "缩量回调" in s: return 0.5
 
-    # --- 📊 趋势跟随 (Lagging Indicators) ---
-    # MA和Supertrend是滞后的，权重降低，主要用于确认
+    # --- 📊 趋势跟随 ---
     if "Supertrend 看多" in s: return 1.2
     if "Supertrend 看空" in s: return -1.2
     
@@ -146,25 +139,25 @@ def get_signal_score(s, regime="TREND"):
     if "Aroon 强多" in s: return 0.9
     if "Aroon 强空" in s: return -0.9
 
-    # --- 🚀 动能 (Momentum) ---
+    # --- 🚀 动能 ---
     if "ADX" in s:
         if "多头加速" in s: return 1.1
         if "空头加速" in s: return -1.1
 
-    # --- 📉 摆动/反转 (Mean Reversion) ---
-    # 左侧信号风险大，分值适中
+    # --- 📉 摆动/反转 ---
     if "双顶" in s: return -2.2
     if "底背离" in s: return 1.5
     if "顶背离" in s: return -1.5
 
     if "RSI" in s:
-        # 震荡市中RSI更有用，趋势市中RSI超买可能钝化
         if "超买" in s: return -0.8 if regime == "RANGE" else 0.0
         if "超卖" in s: return 0.8 if regime == "RANGE" else 0.0
 
-    # --- 🏦 基本面/事件 ---
-    if "价值陷阱" in s: return -5.0 # 绝对的一票否决
-    if "黄金坑" in s: return 2.5    # 戴维斯双击
+    # --- 🏦 基本面 ---
+    if "尚未盈利" in s: return -1.0 
+    if "价值陷阱" in s: return -2.0 
+    
+    if "黄金坑" in s: return 2.5
     if "九转" in s: return 1.5 if "底部" in s else -1.5
     if "华尔街" in s: return 0.5 if "买入" in s else -0.5
     if "财报" in s: return 0.0
@@ -187,14 +180,12 @@ def generate_report_content(signals, regime="TREND"):
         if any(k in s for k in bottom_keywords):
             has_bottom_signal = True
 
-    # 按照绝对值排序，让重要的信号排前面
     items.sort(key=lambda x: abs(x['score']), reverse=True)
     
     final_blocks = []
     earnings_shown = False
     
     for item in items:
-        # 财报置顶警告
         if "财报" in item['raw']:
             if not earnings_shown:
                 icon = "### 🚨 " if "高危" in item['raw'] else "### ⚠️ "
@@ -204,15 +195,13 @@ def generate_report_content(signals, regime="TREND"):
             continue
         
         score_val = item['score']
-        # 格式化分数，保留1位小数
         if score_val == 0:
             title = f"### {item['raw']}"
         else:
             score_str = f"+{score_val:.1f}" if score_val > 0 else f"{score_val:.1f}"
             title = f"### {item['raw']} ({score_str})"
         
-        # 只有重要信号才显示解释，避免刷屏
-        if abs(score_val) >= 0.8 or "💡" in item['raw']:
+        if abs(score_val) >= 0.8 or "💡" in item['raw'] or "盈利" in item['raw']:
             key_for_comment = ""
             for k in SIGNAL_COMMENTS.keys():
                 if k in item['raw']: 
@@ -225,18 +214,14 @@ def generate_report_content(signals, regime="TREND"):
             else:
                 final_blocks.append(title)
         else:
-            # 小分值信号合并显示或者只显示标题
             final_blocks.append(title)
 
     final_text = "\n".join(final_blocks)
-    # 提取前3个主要理由用于List模式
     main_reasons = [x['raw'] for x in items if abs(x['score']) >= 1.2 or "财报" in x['raw']][:3]
     
     return raw_score, final_text, main_reasons, has_bottom_signal
 
 def format_dashboard_title(score, has_bottom_signal=False):
-    # 评分逻辑调整，适应新的小数分值
-    # 最高10星
     count = min(int(round(abs(score))), 10)
     icons = "⭐" * count if score > 0 else "💀" * count if score < 0 else "⚖️"
     
@@ -274,12 +259,12 @@ def format_dashboard_title(score, has_bottom_signal=False):
         
     return f"{status} ({score:+.1f}) {icons}", color, pos_advice
 
-# ================= FMP API =================
+# ================= FMP API & Data Cleaning =================
 def get_finviz_chart_url(ticker):
     timestamp = int(datetime.datetime.now().timestamp())
     return f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=1&p=d&s=l&_{timestamp}"
 
-def get_valuation_and_earnings(ticker, current_price):
+def get_valuation_and_earnings(ticker, current_price, ma200=None):
     if not FMP_API_KEY: return []
     sigs = []
     try:
@@ -308,8 +293,12 @@ def get_valuation_and_earnings(ticker, current_price):
                 rd = r_data[0]
                 eps = rd.get('netIncomePerShareTTM', 0)
                 pe = rd.get('priceToEarningsRatioTTM')
+                
                 if eps is None or eps <= 0:
-                    sigs.append("价值陷阱 (EPS<0)")
+                    if ma200 and current_price > ma200:
+                         sigs.append("尚未盈利 (成长股/EPS<0)")
+                    else:
+                         sigs.append("价值陷阱 (EPS<0)")
                 else:
                     h_url = f"https://financialmodelingprep.com/stable/ratios?symbol={ticker}&limit=3&apikey={FMP_API_KEY}"
                     h_resp = requests.get(h_url, timeout=5)
@@ -344,33 +333,43 @@ def get_daily_data_stable(ticker):
         if hist_resp.status_code != 200: return None
         hist_data = hist_resp.json()
         if not hist_data: return None
+        
+        # ⚠️ 修正：确保时间顺序正确，防止乱序导致计算错误
         df = pd.DataFrame(hist_data)
         df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
-        df = df.iloc[::-1].reset_index(drop=True)
+        df['date'] = pd.to_datetime(df['date'])
+        
+        # 强制按照日期排序 (Oldest -> Newest)
+        df.sort_values(by='date', ascending=True, inplace=True)
         
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         quote_resp = requests.get(quote_url, timeout=5)
         quote_data = quote_resp.json()
-        if not quote_data: return None
-        curr = quote_data[0]
-        today_str = datetime.datetime.now().strftime('%Y-%m-%d')
-        last_hist_date = df['date'].iloc[-1]
         
-        if last_hist_date == today_str:
-            idx = df.index[-1]
-            df.loc[idx, 'close'] = curr['price']
-            df.loc[idx, 'high'] = max(df.loc[idx, 'high'], curr['price']) 
-            df.loc[idx, 'low'] = min(df.loc[idx, 'low'], curr['price'])
-            df.loc[idx, 'volume'] = curr.get('volume', df.loc[idx, 'volume'])
-        else:
-            new_row = {'date': today_str, 'open': curr.get('open', df['close'].iloc[-1]), 'high': curr.get('dayHigh', curr['price']), 'low': curr.get('dayLow', curr['price']), 'close': curr['price'], 'volume': curr.get('volume', 0)}
-            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        df['date'] = pd.to_datetime(df['date'])
+        if quote_data:
+            curr = quote_data[0]
+            today_str = datetime.datetime.now().strftime('%Y-%m-%d')
+            last_hist_date = df['date'].iloc[-1].strftime('%Y-%m-%d')
+            
+            # ⚠️ 修正：重复日期去重逻辑
+            if last_hist_date == today_str:
+                idx = df.index[-1]
+                df.loc[idx, 'close'] = curr['price']
+                df.loc[idx, 'high'] = max(df.loc[idx, 'high'], curr['price']) 
+                df.loc[idx, 'low'] = min(df.loc[idx, 'low'], curr['price'])
+                df.loc[idx, 'volume'] = curr.get('volume', df.loc[idx, 'volume'])
+            else:
+                new_row = {'date': pd.Timestamp(today_str), 'open': curr.get('open', df['close'].iloc[-1]), 'high': curr.get('dayHigh', curr['price']), 'low': curr.get('dayLow', curr['price']), 'close': curr['price'], 'volume': curr.get('volume', 0)}
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        
+        # 再次去重，防止API返回重复数据
+        df.drop_duplicates(subset=['date'], keep='last', inplace=True)
         df.set_index('date', inplace=True)
+        
         return df
     except: return None
 
-# ================= 📈 V29.3 核心分析逻辑 =================
+# ================= 📈 V29.5 核心分析逻辑 =================
 def analyze_daily_signals(ticker):
     df = get_daily_data_stable(ticker)
     if df is None or len(df) < 100: return None, None, None, None, None
@@ -404,7 +403,8 @@ def analyze_daily_signals(ticker):
     market_regime = "TREND" if (curr.get('ADX_14', 0) > 25) else "RANGE"
 
     # 0. 估值 & 财报
-    signals.extend(get_valuation_and_earnings(ticker, price))
+    ma200 = df['CLOSE'].rolling(200).mean().iloc[-1]
+    signals.extend(get_valuation_and_earnings(ticker, price, ma200))
 
     # 1. 趋势 (Trend)
     st_cols = [c for c in df.columns if c.startswith('SUPERT')]
@@ -433,7 +433,7 @@ def analyze_daily_signals(ticker):
         if curr['AROONU_25'] > 70 and curr['AROOND_25'] < 30: signals.append("Aroon 强多")
         elif curr['AROOND_25'] > 70 and curr['AROONU_25'] < 30: signals.append("Aroon 强空")
 
-    # 2. 资金 (Volume)
+    # 2. 资金 (Volume - Fixed Logic)
     if 'CMF_20' in df.columns:
         cmf = curr['CMF_20']
         if cmf > 0.25: signals.append(f"CMF 机构满仓 (极强) [{cmf:.2f}]")
@@ -445,16 +445,22 @@ def analyze_daily_signals(ticker):
     rvol = 0
     if pd.notna(vol_ma) and vol_ma > 0:
         rvol = curr['VOLUME'] / vol_ma
-        is_green = curr['CLOSE'] > curr['OPEN']
+        is_green_candle = curr['CLOSE'] > curr['OPEN']
+        # ⚠️ 修正：严格基于涨跌幅判断“杀跌”还是“抢筹”
+        price_change_pct = (curr['CLOSE'] - prev['CLOSE']) / prev['CLOSE']
+        
         if rvol > 2.0:
-            if is_green: signals.append(f"量: 爆量抢筹 [量比:{rvol:.1f}x]")
+            if price_change_pct > 0: signals.append(f"量: 爆量抢筹 [量比:{rvol:.1f}x]")
             else: signals.append(f"量: 爆量出货 [量比:{rvol:.1f}x]")
         elif rvol > 1.5:
-            if curr['CLOSE'] > prev['CLOSE']: signals.append(f"量: 放量大涨 [量比:{rvol:.1f}x]")
+            if price_change_pct > 0: signals.append(f"量: 放量大涨 [量比:{rvol:.1f}x]")
             else: signals.append(f"量: 放量杀跌 [量比:{rvol:.1f}x]")
         elif rvol < 0.8:
-            if curr['CLOSE'] > prev['CLOSE']: signals.append("量: 缩量上涨 (量价背离)")
+            if price_change_pct > 0: signals.append("量: 缩量上涨 (量价背离)")
             else: signals.append("量: 缩量回调")
+        # 新增：量大但涨幅小
+        elif rvol > 1.2 and abs(price_change_pct) < 0.005:
+            signals.append(f"量: 放量滞涨 [量比:{rvol:.1f}x]")
 
     # 3. 动能
     kc_up = [c for c in df.columns if c.startswith('KCU')][0] if [c for c in df.columns if c.startswith('KCU')] else None
@@ -481,7 +487,6 @@ def analyze_daily_signals(ticker):
 
     # 5. 结构
     try:
-        ma200 = df['CLOSE'].rolling(200).mean().iloc[-1]
         if price < ma200 * 1.1: 
             lows = df['LOW'].iloc[-60:]
             min1 = lows.iloc[:30].min(); min2 = lows.iloc[30:].min()
@@ -533,23 +538,20 @@ def analyze_daily_signals(ticker):
         elif sell_s == 9: signals.append("九转: 顶部卖出信号 [9]")
     except: pass
 
-    # ================= 🛑 修正后的双向止损逻辑 =================
+    # ================= 风控止损 =================
     atr = curr.get('ATRr_14', 0) if 'ATRr_14' in curr else curr.get('ATR_14', 0)
     stop_long = 0
     stop_short = 0
     
     if atr > 0:
-        # 1. 多头止损 (Long Stop): 取 (Supertrend下轨) 和 (现价-2.5ATR) 的较高者，确保不回撤过深
-        # 注意：如果Supertrend目前在上方（看空），则只能用ATR止损，忽略Supertrend
-        if curr['CLOSE'] > st_val: # Supertrend看多
+        if curr['CLOSE'] > st_val: 
             stop_long = max(st_val * 0.99, price - 2.5 * atr)
-        else: # Supertrend看空，但如果用户强制做多，只能用ATR硬止损
+        else: 
             stop_long = price - 2.5 * atr
             
-        # 2. 空头止损 (Short Stop): 取 (Supertrend上轨) 和 (现价+2.5ATR) 的较低者
-        if curr['CLOSE'] < st_val: # Supertrend看空
+        if curr['CLOSE'] < st_val: 
             stop_short = min(st_val * 1.01, price + 2.5 * atr)
-        else: # Supertrend看多，但如果用户做空
+        else:
             stop_short = price + 2.5 * atr
     
     return price, signals, market_regime, stop_long, stop_short
@@ -561,7 +563,6 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
     t = ticker.split()[0].replace(',', '').upper()
     loop = asyncio.get_running_loop()
     
-    # 接收两个止损位
     price, signals, regime, s_long, s_short = await loop.run_in_executor(None, analyze_daily_signals, t)
     
     if price is None:
@@ -571,17 +572,13 @@ async def check_stocks(interaction: discord.Interaction, ticker: str):
     score, desc, _, has_bottom = generate_report_content(signals, regime)
     title, color, pos_advice = format_dashboard_title(score, has_bottom)
     
-    # ================= 💡 智能判断显示哪个止损 =================
-    # 之前的BUG在于只看Supertrend。现在根据总分(score)来决定止损方向。
-    # 逻辑：如果总分 > 0，说明模型倾向做多，显示下方的止损 (Long Stop)。
-    #       如果总分 < 0，说明模型倾向做空，显示上方的止损 (Short Stop)。
-    
-    if score >= 0:
-        stop_val = s_long
-        stop_label = "多头止损"
-    else:
+    # 智能止损展示
+    if score < -4.0:
         stop_val = s_short
         stop_label = "空头止损"
+    else:
+        stop_val = s_long
+        stop_label = "多头止损"
     
     ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
     
@@ -620,7 +617,6 @@ async def list_stocks(interaction: discord.Interaction):
         icons = title.split(' ')[2]
         if "🎣" in title and "🎣" not in icons: icons += " 🎣"
         
-        # 列表里可以不显示具体止损价格，保持简洁
         lines.append(f"**{t}**: {short_status} {icons}\n└ {clean_reason}")
     
     ny_time = datetime.datetime.now(pytz.timezone('America/New_York')).strftime('%H:%M')
@@ -628,36 +624,11 @@ async def list_stocks(interaction: discord.Interaction):
     embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
     await interaction.followup.send(embed=embed)
 
-@bot.tree.command(name="scores", description="查看V29.3评分标准")
+@bot.tree.command(name="scores", description="查看V29.5评分标准")
 async def show_scores(interaction: discord.Interaction):
-    embed = discord.Embed(title="📊 V29.3 机构实盘评分表 (精修版)", description="基于机构实盘胜率的非线性权重系统，精确到小数点。", color=discord.Color.gold())
-    
-    embed.add_field(name="🚀 核心驱动 (Smart Money)", value="""
-`±3.5` CMF机构满仓/抛售 (绝对主力)
-`±3.2` 云上金叉/云下死叉 (大趋势)
-`±2.8` 爆量抢筹/出货 (真金白银)
-""", inline=False)
-
-    embed.add_field(name="💎 结构与形态", value="""
-`+2.6` 双底/三线打击
-`±1.8` 通道突破
-`±1.5` 顶底背离
-`±1.5` 九转/K线形态
-""", inline=False)
-
-    embed.add_field(name="⚖️ 趋势跟随 (辅助)", value="""
-`±1.6` 主力吸筹/派发
-`±1.4` 站上/跌破云层
-`±1.2` Supertrend (右侧确认)
-`±0.9` Aroon/RSI
-""", inline=False)
-    
-    embed.add_field(name="🛡️ 智能止损逻辑", value="""
-**做多止损**: Max(Supertrend, Price-2.5ATR)
-**做空止损**: Min(Supertrend, Price+2.5ATR)
-*系统根据总分自动判断展示哪一侧止损*
-""", inline=False)
-
+    embed = discord.Embed(title="📊 V29.5 机构评分表 (数据修复版)", description="强化数据清洗，精确识别放量涨跌。", color=discord.Color.gold())
+    embed.add_field(name="🚀 核心驱动", value="`±3.5` CMF机构资金\n`±3.2` 云上金叉\n`+2.8` 爆量抢筹", inline=False)
+    embed.add_field(name="⚖️ 量能与趋势", value="`+1.5` 放量大涨\n`-2.0` 放量杀跌\n`±1.2` Supertrend", inline=False)
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="add", description="批量添加")
@@ -702,11 +673,9 @@ async def daily_monitor():
                 stocks[t]['last_alert_date'] = today
                 title, color, pos_advice = format_dashboard_title(score, has_bottom)
                 
-                # 自动判断止损方向
-                if score >= 0:
-                    stop_val = s_long
-                    stop_label = "多头止损"
-                else:
+                stop_val = s_long
+                stop_label = "多头止损"
+                if score < -4.0:
                     stop_val = s_short
                     stop_label = "空头止损"
 
@@ -723,7 +692,7 @@ async def daily_monitor():
 @bot.event
 async def on_ready():
     load_data()
-    print("✅ V29.3 机构精密版 (Fix: StopLoss Logic) 启动")
+    print("✅ V29.5 机构修正版 (Data Clean + Fix Vol) 启动")
     await bot.tree.sync()
     daily_monitor.start()
 
