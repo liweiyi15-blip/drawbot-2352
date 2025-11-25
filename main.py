@@ -202,39 +202,39 @@ def get_daily_data_stable(ticker):
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         curr_quote = requests.get(quote_url, timeout=5).json()[0]
         
-        # 🔥 V34.97 终极修复：放弃查单一个股，改为查全市场日历范围 (按你的URL逻辑)
+        # 🔥 V34.98 修正：使用 stable/earnings-calendar 且只查 今天~明天
         earn_date = curr_quote.get('earningsAnnouncement')
         
         if not earn_date:
             try:
-                # 设定范围：今天 ~ 未来7天
+                # 设定范围：今天(T) ~ 明天(T+1) => 满足"当天+提前一天预警"
                 today_obj = datetime.date.today()
-                next_week_obj = today_obj + datetime.timedelta(days=7)
-                from_str = today_obj.strftime('%Y-%m-%d')
-                to_str = next_week_obj.strftime('%Y-%m-%d')
-
-                # 使用 v3/earning_calendar?from=...&to=... (这回不再用 symbol= 参数了)
-                cal_url = f"https://financialmodelingprep.com/api/v3/earning_calendar?from={from_str}&to={to_str}&apikey={FMP_API_KEY}"
+                next_obj = today_obj + datetime.timedelta(days=1)
                 
-                log_api_call(cal_url, f"Searching Bulk Calendar for {ticker}", "FALLBACK_BULK")
+                from_str = today_obj.strftime('%Y-%m-%d')
+                to_str = next_obj.strftime('%Y-%m-%d')
+
+                # 使用 stable/earnings-calendar (最准确的日历接口)
+                cal_url = f"https://financialmodelingprep.com/stable/earnings-calendar?from={from_str}&to={to_str}&apikey={FMP_API_KEY}"
+                
+                log_api_call(cal_url, f"Searching Stable Calendar for {ticker} ({from_str} to {to_str})", "FALLBACK_STABLE")
                 
                 cal_resp = requests.get(cal_url, timeout=5).json()
                 
-                # 在庞大的列表里手动找这个股票
+                # 在全市场数据中匹配 symbol
                 found_date = None
                 if isinstance(cal_resp, list):
                     for item in cal_resp:
-                        # 必须精确匹配 symbol
                         if item.get('symbol') == ticker:
                             found_date = item.get('date')
-                            break # 找到了就停止
+                            break 
                 
                 if found_date:
                     curr_quote['earningsAnnouncement'] = found_date
                     earn_date = found_date
-                    logger.info(f"✅ [FALLBACK HIT] Found {ticker} in bulk calendar: {earn_date}")
+                    logger.info(f"✅ [FALLBACK HIT] Found {ticker} in stable calendar: {earn_date}")
                 else:
-                    logger.warning(f"⚠️ [FALLBACK MISS] {ticker} not found in next 7 days calendar")
+                    logger.warning(f"⚠️ [FALLBACK MISS] {ticker} not found in Today/Tomorrow calendar")
 
             except Exception as e:
                 logger.error(f"⚠️ [FALLBACK ERROR] {e}")
@@ -264,12 +264,11 @@ def get_daily_data_stable(ticker):
         logger.error(f"❌ Error getting daily data for {ticker}: {e}")
         return None, None
 
-# ================= 🧠 V34.97 引擎 =================
+# ================= 🧠 V34.98 引擎 =================
 
 def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; price = curr['CLOSE']
     
-    # 1. 动态基准分
     base_score = 3.0; regime_msg = ""
     if spy_trend == "Bull": base_score = 3.5; regime_msg = "牛市"
     elif spy_trend == "Bear": base_score = 2.5; regime_msg = "熊市"
@@ -277,7 +276,6 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     if vix_level > 35: base_score = 1.5; regime_msg = f"崩盘 (VIX:{vix_level:.1f})"
     base_score = max(1.5, base_score)
 
-    # 2. 趋势
     try:
         df['HMA_55'] = df.ta.hma(length=55); df['HMA_144'] = df.ta.hma(length=144)
         hma55 = df['HMA_55'].iloc[-1]; hma144 = df['HMA_144'].iloc[-1]
@@ -291,7 +289,6 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     else: 
         trend_score = 0.9; trend_msg = f"{FACTOR_COMMENTS['Trend_Chop']}"
 
-    # 3. VSA
     vol_ma20 = df['VOLUME'].rolling(20).mean().iloc[-1]
     rvol = curr['VOLUME'] / vol_ma20 if vol_ma20 > 0 else 1.0
     price_change = (curr['CLOSE'] - prev['CLOSE']) / prev['CLOSE']
@@ -314,7 +311,6 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
         elif rvol > 1.5 and clv < 0.3: vsa_score = 0.5; vsa_msg = f"{FACTOR_COMMENTS['VSA_Dump']} (K线)"
         elif rvol > 1.0 and price_change > 0 and clv > 0.8: vsa_score = 1.1; vsa_msg = f"{FACTOR_COMMENTS['VSA_Strong']}"
 
-    # 4. 基本面
     fund_score = 1.0; fund_msg = ""
     if fundamentals:
         eps = fundamentals.get('eps', 0)
@@ -334,7 +330,6 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
         else: 
             fund_score = 1.1; fund_msg = f"{FACTOR_COMMENTS['Fund_Good']}"
 
-    # 5. 板块
     sector_ret, etf_name = get_sector_momentum(ticker)
     sector_score = 1.0; sector_msg = ""
     if sector_ret > 0.05: 
@@ -345,7 +340,6 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
         else:
             sector_score = 0.9; sector_msg = f"{FACTOR_COMMENTS['Sector_Cold']} ({etf_name}: {sector_ret*100:.1f}%)"
 
-    # 6. 波动率
     atr = df.ta.atr(length=14).iloc[-1]
     atr_pct = atr / price if price > 0 else 0
     vol_score = 1.0; vol_msg = ""
@@ -356,21 +350,21 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     
     special_signals = []
     
-    # 🚨 财报雷达 (V34.97: 1天预警)
+    # 🚨 财报雷达 (V34.98)
     earn_msg = ""
     try:
         earn_date_str = quote_data.get('earningsAnnouncement')
         if earn_date_str:
-            # 格式清洗
             earn_dt = parser.parse(earn_date_str).replace(tzinfo=None)
             now_dt = datetime.datetime.now().replace(tzinfo=None) 
             days_diff = (earn_dt - now_dt).days
             
-            # 🟢 修正：仅提前1天 (0=今天, 1=明天)
+            # 仅预警今天和明天 (-1<=diff<=1)
+            # diff=0 是今天，diff=1 是明天，diff=-1 是今天刚过几个小时(时区)
             if -1 <= days_diff <= 1:
                 special_signals.append(f"🧨 **财报高危**: {earn_date_str}")
                 final_score *= 0.8
-                earn_msg = f"财报前{days_diff}天(x0.8)"
+                earn_msg = f"财报预警(x0.8)"
     except Exception as e:
         logger.error(f"Earnings Check Error: {e}")
 
@@ -393,7 +387,6 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
             final_score = max(final_score, 9.9); special_signals.append(f"☢️ **机构建仓区启动**")
     except: pass
     
-    # 🛑 止损策略 V34.8 (双轨制：科学/宽容)
     stop_msg = ""
     try:
         if final_score >= 6.0:
@@ -419,19 +412,14 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     
     return final_score, special_signals, chandelier_stop, atr_pct, trend_msg, vsa_msg, fund_msg, sector_msg, regime_msg, vol_msg, debug_formula, stop_msg
 
-# 🧠 科学动态仓位管理 (V34.9: 修复2.8分买9%的逻辑漏洞)
 def calculate_position_size(atr_pct, final_score, price, stop_price, specials):
-    # 1. 逻辑熔断：分数低于4.0 (趋势空头/震荡)，且没有绝密信号，强制空仓
-    # 修正了 2.8分 却因为止损近而算出 9% 仓位的BUG
     is_special = len(specials) > 0
     if final_score < 4.0 and not is_special:
         return "0%"
 
-    # 2. 计算止损距离
     stop_distance_pct = (price - stop_price) / price
     if stop_distance_pct <= 0: return "0% (数据异常)"
 
-    # 3. 动态风险敞口
     if final_score >= 9.0:
         risk_per_trade = 0.020 
     elif final_score >= 7.5:
@@ -439,7 +427,7 @@ def calculate_position_size(atr_pct, final_score, price, stop_price, specials):
     elif final_score >= 6.0:
         risk_per_trade = 0.010 
     else:
-        risk_per_trade = 0.005 # 只有绝密信号(抄底)才给0.5%风险
+        risk_per_trade = 0.005 
         
     position_size = risk_per_trade / stop_distance_pct
     pos_pct = position_size * 100
@@ -451,7 +439,6 @@ def calculate_position_size(atr_pct, final_score, price, stop_price, specials):
     
     return f"{int(pos_pct)}%"
 
-# 🔥 四字评价 + 战术后缀
 def get_short_comment(score, trend_msg):
     if score >= 9.5: return "极值共振"
     if score >= 7.5: return "多头主升"
@@ -465,9 +452,7 @@ def get_pos_comment(score):
     if score >= 4.0: return "轻仓试错"
     return "空仓观望"
 
-# ================= Bot 指令 =================
-
-@bot.tree.command(name="check", description="V34.97 战术指令版")
+@bot.tree.command(name="check", description="V34.98 战术指令版")
 async def check_stocks(interaction: discord.Interaction, ticker: str):
     if not interaction.response.is_done(): await interaction.response.defer()
     t = ticker.split()[0].replace(',', '').upper()
@@ -560,7 +545,7 @@ async def list_stocks(interaction: discord.Interaction):
         if any("冰点" in s for s in specials): icon = "🧊"
         lines.append(f"**{t}**: `{score:.1f}` {icon}")
     
-    embed = discord.Embed(title="📊 V34.97 机构看板", description="\n".join(lines), color=discord.Color.blue())
+    embed = discord.Embed(title="📊 V34.98 机构看板", description="\n".join(lines), color=discord.Color.blue())
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="add", description="添加")
@@ -604,7 +589,7 @@ async def daily_monitor():
                 summary_lines.append(f"{icon} **{t}** ({score:.1f}): ${price:.2f}{spec_str}")
 
         if summary_lines:
-            msg = f"📊 <@{uid}> **V34.97 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
+            msg = f"📊 <@{uid}> **V34.98 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
             await channel.send(msg[:1900])
             await asyncio.sleep(1)
 
@@ -633,7 +618,7 @@ async def premarket_alert():
 async def on_ready():
     load_data()
     api_cache_daily.clear(); api_cache_fund.clear(); api_cache_sector.clear()
-    logger.info("✅ V34.97 Tactical Command Edition Started.")
+    logger.info("✅ V34.98 Tactical Command Edition Started.")
     await bot.tree.sync()
     daily_monitor.start()
     premarket_alert.start()
