@@ -202,8 +202,36 @@ def get_daily_data_stable(ticker):
         quote_url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={FMP_API_KEY}"
         curr_quote = requests.get(quote_url, timeout=5).json()[0]
         
-        # 🐛 包含 earningsAnnouncement
+        # 🔥 V34.95 补丁：如果 Quote 里的 Earn 为空，强制调用日历接口补救
         earn_date = curr_quote.get('earningsAnnouncement')
+        
+        if not earn_date:
+            try:
+                # 备用：历史日历接口，通常包含未来预测
+                cal_url = f"https://financialmodelingprep.com/api/v3/historical/earning_calendar/{ticker}?limit=4&apikey={FMP_API_KEY}"
+                cal_resp = requests.get(cal_url, timeout=3).json()
+                
+                # 寻找 >= 今天的最近日期
+                today_dt = datetime.datetime.now().date()
+                future_dates = []
+                for item in cal_resp:
+                    d_str = item.get('date')
+                    if d_str:
+                        d_obj = pd.to_datetime(d_str).date()
+                        if d_obj >= today_dt:
+                            future_dates.append(d_str)
+                
+                if future_dates:
+                    # 排序取最近的一个
+                    future_dates.sort()
+                    curr_quote['earningsAnnouncement'] = future_dates[0]
+                    earn_date = future_dates[0]
+                    logger.info(f"✅ [FALLBACK] Success found Earn Date for {ticker}: {earn_date}")
+                else:
+                    logger.warning(f"⚠️ [FALLBACK] No future earnings found in calendar for {ticker}")
+            except Exception as e:
+                logger.error(f"⚠️ [FALLBACK] Error: {e}")
+
         log_api_call(quote_url, f"Live Quote: P={curr_quote.get('price')}, Earn={earn_date}", "QUOTE_DATA")
 
         if 'upVolume' in curr_quote and (curr_quote['upVolume'] == 'N/A' or curr_quote['upVolume'] is None):
@@ -229,7 +257,7 @@ def get_daily_data_stable(ticker):
         logger.error(f"❌ Error getting daily data for {ticker}: {e}")
         return None, None
 
-# ================= 🧠 V34.9 引擎 =================
+# ================= 🧠 V34.95 引擎 =================
 
 def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, ticker):
     curr = df.iloc[-1]; prev = df.iloc[-2]; price = curr['CLOSE']
@@ -321,7 +349,7 @@ def calculate_v34_score(df, quote_data, fundamentals, spy_trend, vix_level, tick
     
     special_signals = []
     
-    # 🚨 财报雷达 (V34.9新增)
+    # 🚨 财报雷达 (V34.95 双保险版)
     earn_msg = ""
     try:
         earn_date_str = quote_data.get('earningsAnnouncement')
@@ -432,7 +460,7 @@ def get_pos_comment(score):
 
 # ================= Bot 指令 =================
 
-@bot.tree.command(name="check", description="V34.9 战术指令版")
+@bot.tree.command(name="check", description="V34.95 战术指令版")
 async def check_stocks(interaction: discord.Interaction, ticker: str):
     if not interaction.response.is_done(): await interaction.response.defer()
     t = ticker.split()[0].replace(',', '').upper()
@@ -525,7 +553,7 @@ async def list_stocks(interaction: discord.Interaction):
         if any("冰点" in s for s in specials): icon = "🧊"
         lines.append(f"**{t}**: `{score:.1f}` {icon}")
     
-    embed = discord.Embed(title="📊 V34.9 机构看板", description="\n".join(lines), color=discord.Color.blue())
+    embed = discord.Embed(title="📊 V34.95 机构看板", description="\n".join(lines), color=discord.Color.blue())
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="add", description="添加")
@@ -569,7 +597,7 @@ async def daily_monitor():
                 summary_lines.append(f"{icon} **{t}** ({score:.1f}): ${price:.2f}{spec_str}")
 
         if summary_lines:
-            msg = f"📊 <@{uid}> **V34.9 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
+            msg = f"📊 <@{uid}> **V34.95 核心简报** (VIX:{vix_level:.1f}):\n" + "\n".join(summary_lines)
             await channel.send(msg[:1900])
             await asyncio.sleep(1)
 
@@ -598,7 +626,7 @@ async def premarket_alert():
 async def on_ready():
     load_data()
     api_cache_daily.clear(); api_cache_fund.clear(); api_cache_sector.clear()
-    logger.info("✅ V34.9 Tactical Command Edition Started.")
+    logger.info("✅ V34.95 Tactical Command Edition Started.")
     await bot.tree.sync()
     daily_monitor.start()
     premarket_alert.start()
