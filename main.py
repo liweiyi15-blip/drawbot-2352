@@ -85,7 +85,7 @@ def save_data():
     except:
         pass
 
-# ================= 🛡️ V29.6 评分逻辑 =================
+# ================= 🛡️ V29.7 评分逻辑 =================
 def get_signal_score(s, regime="TREND"):
     s = s.strip()
     if "💡" in s: return 0.0 
@@ -344,17 +344,19 @@ def get_daily_data_stable(ticker):
         print(f"[DEBUG] Data Error: {e}")
         return None
 
-# ================= 📈 V29.6 核心分析逻辑 =================
+# ================= 📈 V29.7 核心分析逻辑 =================
 def analyze_daily_signals(ticker):
     df = get_daily_data_stable(ticker)
     if df is None or len(df) < 100: return None, None, None, None, None
     
+    # 🔥 修复：先转大写，再打印日志
+    df.columns = [str(c).upper() for c in df.columns]
+
     # --- DEBUG: 打印K线尾部，检查数据是否正确 ---
     print(f"--- K-LINE DEBUG: {ticker} ---")
     print(df.tail(3)[['OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME']])
     print("------------------------------")
     
-    df.columns = [str(c).upper() for c in df.columns]
     signals = []
     
     # 1. 指标计算
@@ -362,13 +364,11 @@ def analyze_daily_signals(ticker):
     df.ta.adx(length=14, append=True)
     df.ta.aroon(length=25, append=True)
     df.ta.cmf(length=20, append=True)
-    df['VOL_MA_20'] = df.ta.sma(close='volume', length=20)
+    df['VOL_MA_20'] = df.ta.sma(close='VOLUME', length=20) # 修正大写
     df.ta.kc(length=20, scalar=2, append=True)
     df.ta.rsi(length=14, append=True)
     df.ta.atr(length=14, append=True)
     
-    # 删除了morning_star检查，避免报错干扰日志
-
     # 一目均衡
     high9 = df['HIGH'].rolling(9).max(); low9 = df['LOW'].rolling(9).min()
     df['tenkan'] = (high9 + low9) / 2
@@ -601,9 +601,9 @@ async def list_stocks(interaction: discord.Interaction):
     embed.set_footer(text=f"FMP Ultimate API • 机构级多因子模型 • 今天 {ny_time}")
     await interaction.followup.send(embed=embed)
 
-@bot.tree.command(name="scores", description="查看V29.6评分标准")
+@bot.tree.command(name="scores", description="查看V29.7评分标准")
 async def show_scores(interaction: discord.Interaction):
-    embed = discord.Embed(title="📊 V29.6 机构评分表 (Logs版)", description="开启后台日志调试模式。", color=discord.Color.gold())
+    embed = discord.Embed(title="📊 V29.7 机构评分表 (Fix Error)", description="修复列名大写错误，日志模式已开启。", color=discord.Color.gold())
     embed.add_field(name="🚀 核心驱动", value="`±3.5` CMF机构资金\n`±3.2` 云上金叉\n`+2.8` 爆量抢筹", inline=False)
     await interaction.response.send_message(embed=embed)
 
@@ -668,7 +668,7 @@ async def daily_monitor():
 @bot.event
 async def on_ready():
     load_data()
-    print("✅ V29.6 机构调试版 (Logs Enabled) 启动")
+    print("✅ V29.7 机构修复版 (Fix UpperCase) 启动")
     await bot.tree.sync()
     daily_monitor.start()
 
